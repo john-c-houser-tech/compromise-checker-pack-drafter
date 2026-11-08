@@ -41,6 +41,9 @@ MAX_BODY = 8 * 1024
 # last sign is older than --days: as far back as `candidates refresh` keeps vendor
 # records current (its default window).
 OPEN_FOR = dt.timedelta(days=180)
+# But never before the page's first window (John, 2026-11-07): threats from before
+# the page existed are history, not a backlog to work through.
+OPEN_SINCE = dt.datetime(2026, 10, 8, tzinfo=dt.UTC)
 CSP = (
     "default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self';"
     " form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
@@ -159,7 +162,7 @@ def view(site: Site, store: Store) -> dict:
     # CVE ever decided is settled once it leaves the window, so ageing alone never
     # reopens a decision.
     in_window = {c.cve for c in found}
-    wide = timeutil.fmt(now - max(OPEN_FOR, dt.timedelta(days=site.days)))
+    wide = timeutil.fmt(max(now - max(OPEN_FOR, dt.timedelta(days=site.days)), OPEN_SINCE))
     before = [
         c
         for c in candidates.classify(store, wide, now=now)

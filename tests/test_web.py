@@ -485,32 +485,32 @@ def test_the_window_is_grouped_as_the_list_groups_it(page, capsys):
     # A before the window, B and C in it: the page must not let A pull B away from C.
     s = Store(page.site.store_path)
     for cve, when in (
-        ("CVE-2026-2001", "2026-10-03T00:00:00.000000Z"),
-        ("CVE-2026-2002", "2026-10-13T00:00:00.000000Z"),
-        ("CVE-2026-2003", "2026-10-26T00:00:00.000000Z"),
+        ("CVE-2026-2001", "2026-10-09T00:00:00.000000Z"),
+        ("CVE-2026-2002", "2026-10-20T00:00:00.000000Z"),
+        ("CVE-2026-2003", "2026-11-02T00:00:00.000000Z"),
     ):
         _nginx(s, cve, when)
     s.close()
-    page.site.days = 30
+    page.site.days = 20
     _, html = page.request("GET")
     assert 'value="CVE-2026-2002,CVE-2026-2003"' in html
-    assert 'value="CVE-2026-2001"' in html and "Before the 30 days" in html
+    assert 'value="CVE-2026-2001"' in html and "Before the 20 days" in html
     body = page.form(cves="CVE-2026-2002,CVE-2026-2003", families="nginx", reason="both")
     assert page.post(body)[0].status == 303
     home = str(page.site.home)
-    assert cli.main(["--home", home, "candidates", "list", "--days", "30"]) == 0
+    assert cli.main(["--home", home, "candidates", "list", "--days", "20"]) == 0
     out = capsys.readouterr().out
     assert "decision: approved 2026-11-07: both" in out
 
 
 def test_a_later_sign_does_not_bring_a_decided_older_threat_back(page):
     s = Store(page.site.store_path)
-    _kev(s, "CVE-2026-3001", "2026-08-01")  # first sign, long before the window
+    _kev(s, "CVE-2026-3001", "2026-10-10")  # first sign, before the window
     _nginx(s, "CVE-2026-3001", "2026-11-05T00:00:00.000000Z")  # NVD re-stamped
     s.close()
-    page.site.days = 30
+    page.site.days = 20
     _, html = page.request("GET")
-    assert 'id="t-cve-2026-3001"' in html and "Before the 30 days" in html
+    assert 'id="t-cve-2026-3001"' in html and "Before the 20 days" in html
     body = page.form(cves="CVE-2026-3001", families="nginx", reason="old news")
     assert page.post(body)[0].status == 303
     _, html = page.request("GET")
@@ -557,9 +557,9 @@ def test_a_decision_straddling_the_window_edge_stays_decided(page, capsys):
 
 def test_a_stale_form_for_a_decided_older_threat_is_refused(page):
     s = Store(page.site.store_path)
-    _nginx(s, "CVE-2026-5001", "2026-09-01T00:00:00.000000Z")
+    _nginx(s, "CVE-2026-5001", "2026-10-10T00:00:00.000000Z")
     s.close()
-    page.site.days = 30
+    page.site.days = 20
     body = page.form(cves="CVE-2026-5001", families="nginx", reason="yes")
     assert page.post(body)[0].status == 303
     stale = page.form(cves="CVE-2026-5001", families="nginx", verdict="reject", reason="no")
@@ -586,3 +586,27 @@ def test_a_time_is_read_without_its_surrounding_space_and_only_then():
     assert timeutil.parse("2026-11-02T00:00:00Z\n") == timeutil.parse("2026-11-02")
     with pytest.raises(timeutil.TimeError):
         timeutil.parse("2026-11-02T00:00:00Z\nX")
+
+
+def test_nothing_before_the_pages_first_window_comes_back(page):
+    s = Store(page.site.store_path)
+    _nginx(s, "CVE-2026-7001", "2026-10-07T00:00:00.000000Z")  # the day before
+    _nginx(s, "CVE-2026-7002", "2026-10-08T12:00:00.000000Z")  # its first day
+    s.close()
+    page.site.days = 20
+    _, html = page.request("GET")
+    assert 'id="t-cve-2026-7001"' not in html
+    assert 'id="t-cve-2026-7002"' in html
+
+
+def test_a_look_again_threat_is_settled_once_it_leaves_the_window(page):
+    assert page.post(page.form(reason="yes"))[0].status == 303
+    s = Store(page.site.store_path)
+    for cve in PHP:
+        _vendor(s, cve, "ubuntu", [_pkg("ubuntu:24.04", "php8.3"), _pkg("ubuntu:24.04", "apache2")])
+    s.close()
+    _, html = page.request("GET")
+    assert "Look again" in html.split('id="t-cve-2026-109618"', 1)[1].split("</article>")[0]
+    page.site.days = 10
+    _, html = page.request("GET")
+    assert 'id="t-cve-2026-109618"' not in html

@@ -14,14 +14,18 @@ judge** and **Third-party builds** with a form each; **Kernels** (a notice only,
 plan D2) and **Set aside** (changed in `setaside.toml`, not here) without one.
 Below them, the CVEs that aren't threats here yet, and every decision made.
 
-The window goes by each CVE's first sign, as the list's does. A threat still to
-decide (undecided, or Look again) stays on the page after its first sign leaves
-the window, marked "Before the 30 days", until someone decides it: the page reads
-back 180 days, as far as `candidates refresh` keeps vendor records current. These
-older CVEs are grouped among themselves only, so the window's threats are grouped
-exactly as `drafter candidates list` groups them. A CVE that was ever decided is
-settled once it leaves the window, so ageing alone never reopens a decision;
-decided threats and notices leave with their window.
+The window goes by each CVE's first sign, as the list's does. A threat no one has
+decided stays on the page after its first sign leaves the window, marked "Before
+the 30 days", until someone decides it. The page reads back 180 days (as far as
+`candidates refresh` keeps vendor records current), and never before 2026-10-08,
+its first window: threats from before the page existed are history, not a backlog.
+These older CVEs are grouped among themselves only, so the window's threats are
+grouped exactly as `drafter candidates list` groups them.
+
+A CVE that was ever decided is settled once it leaves the window: its last
+decision stands, so ageing alone never reopens one. That includes a threat that
+read Look again (its packages or section changed) and wasn't decided again while
+in the window. Decided threats and notices leave with their window.
 
 Feeds that need a look are named at the top, since the list may then be missing
 threats. `drafter candidates list` shows each threat's decision too (over its own
