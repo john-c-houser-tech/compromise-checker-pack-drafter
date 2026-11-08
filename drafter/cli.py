@@ -21,7 +21,6 @@ import fcntl
 import json
 import logging
 import os
-import re
 import sqlite3
 import sys
 import time
@@ -242,6 +241,11 @@ def main(argv: list[str] | None = None) -> int:
             return _candidates_list(store, args) if args.action == "list" else _status(store)
         finally:
             store.close()
+    if args.command == "draft":
+        # No run lock: a draft writes only its own spending rows, each with the caps
+        # checked in the same transaction, so the hourly run isn't held up for the
+        # minute or two the AI takes (and a draft isn't turned away by it).
+        return _draft_unlocked(home, args)
     try:
         lock = _lock(home)
     except Locked:
@@ -263,8 +267,6 @@ def main(argv: list[str] | None = None) -> int:
             return _candidates_write(ctx, args)
         if args.command == "fill":
             return _fill(ctx, args)
-        if args.command == "draft":
-            return _draft(ctx.store, args)
         if args.command == "propose":
             return _propose(ctx, args)
         if args.action == "fetch":
@@ -482,18 +484,6 @@ def _draft_cves(args) -> list[str] | None:
     return cves
 
 
-def _package_names(store: Store, cves: list[str]) -> set[str]:
-    """The threat's package names that would give a package away in prose: those
-    with a digit or a sign in them (dotnet8.0, java-17-openjdk), not plain words a
-    sentence uses for the software (brotli, php)."""
-    since = timeutil.fmt(timeutil.now() - dt.timedelta(days=3650))
-    names = set()
-    for cand in candidates.classify(store, since):
-        if cand.cve in cves:
-            names |= {p["package"] for p in cand.packages if re.search(r"[\d+._-]", p["package"])}
-    return names
-
-
 def _draft_dry(store: Store, args) -> int:
     from drafter import draft
 
@@ -504,7 +494,7 @@ def _draft_dry(store: Store, args) -> int:
         decision = draft.approved(store, cves)
     except draft.DraftError as exc:
         print(safe(exc), file=sys.stderr)
-        return 2
+        return 1
     found = draft.sources(store, list(decision.cves))
     messages = [{"role": "user", "content": draft.user_message(list(decision.cves), found)}]
     tokens = draft.estimate(draft.SYSTEM, messages)
@@ -516,28 +506,58 @@ def _draft_dry(store: Store, args) -> int:
         f" ${draft.worst_cost(tokens):.2f} for the first request (cap ${draft.PER_DRAFT_CAP:.2f}"
         f" a draft); ${draft.spent(store):.2f} spent of ${draft.TOTAL_CAP:.2f}. Nothing sent."
     )
+    problem = None if found else "nothing fetched about these CVEs to draft from"
+    try:
+        draft.allow(store, draft.worst_cost(tokens), 0.0, args.past_tell_mark)
+    except draft.DraftError as exc:
+        problem = str(exc)
+    if problem:
+        print(safe(f"a real run would stop: {problem}"), file=sys.stderr)
+        return 1
     return 0
 
 
-def _draft(store: Store, args) -> int:
+def _draft_unlocked(home: Path, args) -> int:
+    cves = _draft_cves(args)
+    if cves is None:
+        return 2
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        # Checked before anything is recorded: a request that can't be sent costs
+        # nothing and mustn't count.
+        print(
+            'no API key: ANTHROPIC_API_KEY=$(op read "op://Personal/Anthropic API Key/notesPlain")'
+            " drafter draft …",
+            file=sys.stderr,
+        )
+        return 2
+    if args.out is not None and not args.out.parent.is_dir():
+        print(f"--out: no folder {safe(args.out.parent)}", file=sys.stderr)
+        return 2
+    try:
+        store = Store(home / "drafter.sqlite3")
+    except (StoreError, sqlite3.Error) as exc:
+        print(safe(exc), file=sys.stderr)
+        return 1
+    try:
+        filled = upgrade.fill(store)
+        if filled:
+            print(filled)
+        return _draft(store, args, cves)
+    finally:
+        store.close()
+
+
+def _draft(store: Store, args, cves: list[str]) -> int:
     import anthropic
 
     from drafter import draft
 
-    cves = _draft_cves(args)
-    if cves is None:
-        return 2
-    try:
-        client = anthropic.Anthropic(max_retries=0)
-    except anthropic.AnthropicError as exc:
-        print(f"no API key: {safe(exc)}", file=sys.stderr)
-        return 2
+    client = anthropic.Anthropic(max_retries=0)
     try:
         made = draft.draft(
             store,
             cves,
             client,
-            names=_package_names(store, cves),
             past_tell=args.past_tell_mark,
         )
     except draft.DraftError as exc:

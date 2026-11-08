@@ -42,7 +42,7 @@ EFFORT = "high"
 # try within the $0.50 a draft may cost.
 MAX_TOKENS = 8_000
 # $ per million tokens: input, output, cache write (5 minutes), cache read.
-PRICES = {"claude-opus-5-5": (4.00, 20.00, 5.00, 0.40)}
+PRICES = {"claude-opus-5-5": (4.00, 20.00, 5.00, 0.20)}
 PER_DRAFT_CAP = 0.50
 TOTAL_CAP = 10.00
 TELL_AT = 5.00
@@ -88,6 +88,24 @@ class Source:
     fetch_id: int
     sha256: str | None
     url: str
+    urls: frozenset[str] = frozenset()  # every address in its words, the only references
+
+
+def _urls(value: object) -> frozenset[str]:
+    """Every address in a source's words, read from the values themselves (a Red Hat
+    references entry can hold several, one a line)."""
+    found: set[str] = set()
+    if isinstance(value, str):
+        for url in _URL.findall(value):
+            found.add(url)
+            found.add(url.rstrip(".,;:)]"))
+    elif isinstance(value, dict):
+        for item in value.values():
+            found |= _urls(item)
+    elif isinstance(value, list):
+        for item in value:
+            found |= _urls(item)
+    return frozenset(found)
 
 
 def _body(store: Store, fetch_id: int | None) -> bytes | None:
@@ -113,7 +131,7 @@ def sources(store: Store, cves: list[str]) -> list[Source]:
         ).fetchone()
         if row and (row[0] or row[1]):
             text = f"Description: {row[0] or '(none yet)'}\nCVSS: {row[1] or '(none yet)'}"
-            out.append(Source(f"NVD, {cve}", text, row[2], row[3], row[4]))
+            out.append(Source(f"NVD, {cve}", text, row[2], row[3], row[4], _urls(row[0])))
         row = db.execute(
             "SELECT k.fetch_id, f.sha256, f.url FROM kev k JOIN fetches f ON f.id = k.fetch_id"
             " WHERE k.cve = ?",
@@ -129,6 +147,7 @@ def sources(store: Store, cves: list[str]) -> list[Source]:
                         row[0],
                         row[1],
                         row[2],
+                        _urls(entry),
                     )
                 )
         for vendor, fetch_id, sha, url in db.execute(
@@ -141,7 +160,14 @@ def sources(store: Store, cves: list[str]) -> list[Source]:
             if words:
                 name = "Red Hat" if vendor == "redhat" else "Ubuntu"
                 out.append(
-                    Source(f"{name}, {cve}", json.dumps(words, indent=1), fetch_id, sha, url)
+                    Source(
+                        f"{name}, {cve}",
+                        json.dumps(words, indent=1),
+                        fetch_id,
+                        sha,
+                        url,
+                        _urls(words),
+                    )
                 )
     return out
 
@@ -156,6 +182,27 @@ def _kev_entry(body: bytes | None, cve: str) -> dict | None:
         if isinstance(item, dict) and item.get("cveID") == cve:
             return item
     return None
+
+
+def package_names(store: Store, cves: list[str]) -> set[str]:
+    """Every package the vendors name for these CVEs, on any release, that would give
+    a package away in prose: those with a digit or a sign (dotnet8.0, openjdk-18,
+    edk2-hwe), not the plain words a sentence uses for the software (brotli, php)."""
+    names: set[str] = set()
+    marks = ", ".join("?" for _ in cves)
+    for (packages,) in store.db.execute(
+        f"SELECT packages FROM vendor_cve WHERE found = 1 AND cve IN ({marks})",  # noqa: S608
+        list(cves),
+    ):
+        try:
+            listed = json.loads(packages)
+        except ValueError:
+            continue
+        for p in listed if isinstance(listed, list) else []:
+            name = p.get("package") if isinstance(p, dict) else None
+            if isinstance(name, str) and re.search(r"[\d+._-]", name):
+                names.add(name)
+    return names
 
 
 _RED_HAT_WORDS = ("bugzilla", "threat_severity", "public_date", "cvss3", "cwe", "details",
@@ -206,8 +253,12 @@ def _vocabulary_text() -> str:
         for cid, (title, variants) in vocabulary.CHECKS.items()
     )
     events = "\n".join(
-        f"  {etype}: fields {', '.join(fields) or '(none)'}"
-        for etype, fields in vocabulary.EVENTS.items()
+        f"  {etype}: fields {', '.join(fields) or '(none of its own)'}"
+        for etype, fields in vocabulary.OWN_FIELDS.items()
+    )
+    events += (
+        f"\n  Any event: also {', '.join(vocabulary.ANY_EVENT)}. Every type above but"
+        f" web.request, web.error and process.exec: also {', '.join(vocabulary.MESSAGE_FIELDS)}."
     )
     sections = "\n".join(f"  {name}: {what}" for name, what in vocabulary.SECTIONS.items())
     return f"Built-in checks:\n{checks}\n\nEvent types:\n{events}\n\nSnapshot sections:\n{sections}"
@@ -235,8 +286,9 @@ Rules:
 - Detections use only what the tool has, listed below: a built-in check by its id
   (its findings then weigh up to likelihood_ratio 100), or the pack's own rule over
   the event types and fields listed, or over the snapshot sections listed (at most
-  20). Weigh honestly: most signs of a memory-corruption bug are weak, since a crash
-  isn't a compromise. If no sign of this threat shows in what the tool collects, give
+  20); a snapshot rule matches an item's key only, never its fields. Weigh
+  honestly: most signs of a memory-corruption bug are weak, since a crash isn't a
+  compromise. If no sign of this threat shows in what the tool collects, give
   fewer detections, or none ([]), and say so in the unknowns.
 - mitigations_yaml and detections_yaml are YAML lists, in the format below.
 - Write plainly, for a server administrator. Each remediation item is one or two
@@ -249,8 +301,15 @@ The pack format, as the tool reads it:
 {packformat.__doc__}"""
 
 
+def _data(text: str) -> str:
+    """Fetched text inside a source block, unable to close it or open another."""
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
 def user_message(cves: list[str], found: list[Source]) -> str:
-    blocks = "\n\n".join(f'<source name="{s.name}">\n{_cut(s.text)}\n</source>' for s in found)
+    blocks = "\n\n".join(
+        f'<source name="{s.name}">\n{_data(_cut(s.text))}\n</source>' for s in found
+    )
     return f"Draft the pack parts for {', '.join(cves)}. The sources, as fetched:\n\n{blocks}"
 
 
@@ -271,9 +330,14 @@ _EXPOSURE = {
     ],
 }
 _URL = re.compile(r"https?://[^\s\"'<>]+")
-# A version: three numbers (1.2.1), or a vendor build (1.0.9-2ubuntu0.1, 3.8-1.el9).
+# A version: three numbers, however written (1.2.1, v1.2.1, 1.2.1rc1), but not a
+# four-number address (127.0.0.1); a version pattern (1.2.*, 8.*); or a vendor build
+# (1.0.9-2ubuntu0.1, 3.8-1.el9).
 _VERSION = re.compile(
-    r"(?<![\w.])\d+\.\d+\.\d+(?![\w])|\d[\w.+~]*-\d[\w.+~]*(?:ubuntu|deb|el\d)", re.IGNORECASE
+    r"(?<![\d.])\d+\.\d+\.\d+(?!\.\d)"
+    r"|(?<![\d.])\d+(?:\.\d+)*\.\*"
+    r"|\d[\w.+~]*-\d[\w.+~]*(?:ubuntu|deb|el\d)",
+    re.IGNORECASE,
 )
 
 
@@ -287,7 +351,15 @@ class Checked:
 
 def check(text: str, found: list[Source], names: set[str], cves: list[str]) -> Checked:
     """Read an answer: the pack format, the checker's vocabulary, references from the
-    sources only, and no version or package name anywhere."""
+    sources only, and no version or package name anywhere. Never raises: an answer
+    that breaks the reading is refused, since it has already been paid for."""
+    try:
+        return _check(text, found, names, cves)
+    except Exception as exc:  # noqa: BLE001 - the model's text, whatever it holds
+        return Checked(None, problems=[f"the answer couldn't be read: {type(exc).__name__}"])
+
+
+def _check(text: str, found: list[Source], names: set[str], cves: list[str]) -> Checked:
     try:
         answer = json.loads(text)
     except (ValueError, RecursionError):
@@ -297,9 +369,10 @@ def check(text: str, found: list[Source], names: set[str], cves: list[str]) -> C
     out = Checked(answer)
     for key in ("mitigations_yaml", "detections_yaml"):
         try:
-            value = yaml.load(str(answer[key]), Loader=packformat._Loader)  # noqa: S506 - safe
-        except (yaml.YAMLError, ValueError, TypeError, RecursionError) as exc:
-            out.problems.append(f"{key} isn't YAML: {type(exc).__name__}")
+            # As the checker reads a pack: no aliases, no deep nesting, YAML 1.2.
+            value = packformat.load(str(answer[key]).encode("utf-8"))
+        except (packformat.PackError, RecursionError) as exc:
+            out.problems.append(f"{key} isn't YAML a pack can hold: {exc}"[:300])
             continue
         value = [] if value is None else value
         if not isinstance(value, list):
@@ -326,17 +399,43 @@ def check(text: str, found: list[Source], names: set[str], cves: list[str]) -> C
             f"format: {'.'.join(map(str, e['loc']))}: {e['msg']}" for e in exc.errors()[:20]
         ]
     out.problems += _vocabulary_problems(out.detections)
-    said = "\n".join(s.text for s in found)
+    known = frozenset().union(*(s.urls for s in found))
     for url in answer["references"] if isinstance(answer["references"], list) else []:
-        if not isinstance(url, str) or url not in said:
+        if not isinstance(url, str) or url not in known:
             out.problems.append(f"a reference that isn't in the sources: {url}")
-    prose = _URL.sub(" ", json.dumps(answer, ensure_ascii=False))
+    # Every string, as sent and as read: a YAML escape ("1\x2E2\x2E1") hides nothing,
+    # and no JSON escape (\n) stands next to what is looked for.
+    prose = _URL.sub(" ", "\n".join(_strings([answer, out.mitigations, out.detections])))
     for match in sorted(set(_VERSION.findall(prose)))[:5]:
         out.problems.append(f"a version in the answer: {match}")
+    lowered = prose.lower()
     for name in sorted(names):
-        if re.search(rf"(?<![\w.-]){re.escape(name)}(?![\w-])", prose):
+        # Anywhere, any case: a binary name builds on its package's (libruby4.0,
+        # java-17-openjdk-headless).
+        if name.lower() in lowered:
             out.problems.append(f"a package name in the answer: {name}")
     return out
+
+
+def _strings(value: object) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        return [s for k, v in value.items() for s in _strings(k) + _strings(v)]
+    if isinstance(value, list | tuple):
+        return [s for item in value for s in _strings(item)]
+    return [str(value)] if value is not None else []
+
+
+def _event_fields(etype: object) -> tuple[str, ...] | None:
+    """The fields of an event type, exact or a prefix ending in "." (web.): the
+    fields of every type it covers. None: no type the tool writes."""
+    if not isinstance(etype, str):
+        return None
+    if etype.endswith("."):
+        covered = [f for t, f in vocabulary.EVENTS.items() if t.startswith(etype)]
+        return tuple(sorted({x for f in covered for x in f})) if covered else None
+    return vocabulary.EVENTS.get(etype)
 
 
 def _vocabulary_problems(detections: list) -> list[str]:
@@ -347,38 +446,52 @@ def _vocabulary_problems(detections: list) -> list[str]:
         name = d.get("id", "?")
         check_id = d.get("check")
         if check_id is not None:
-            known = vocabulary.CHECKS.get(check_id)
+            known = vocabulary.CHECKS.get(check_id) if isinstance(check_id, str) else None
             if known is None:
                 problems.append(f"detection {name}: the tool has no check {check_id}")
             elif d.get("variant") is not None and d["variant"] not in known[1]:
                 problems.append(f"detection {name}: {check_id} has no variant {d['variant']}")
         events = d.get("events")
-        for match in (events.get("any_of") or []) if isinstance(events, dict) else []:
+        any_of = events.get("any_of") if isinstance(events, dict) else None
+        for match in any_of if isinstance(any_of, list) else []:
             if not isinstance(match, dict):
                 continue
             etype = match.get("type")
-            fields = vocabulary.EVENTS.get(etype)
+            fields = _event_fields(etype)
             if fields is None:
                 problems.append(f"detection {name}: no event type {etype} here")
                 continue
-            for field_name in match.get("fields") or {}:
+            given = match.get("fields")
+            for field_name in given if isinstance(given, dict) else {}:
                 if field_name not in fields:
                     problems.append(f"detection {name}: {etype} has no field {field_name}")
-        if isinstance(events, dict) and events.get("by") is not None:
-            if not any(events["by"] in f for f in vocabulary.EVENTS.values()):
-                problems.append(f"detection {name}: no field {events['by']} to count by")
+        by = events.get("by") if isinstance(events, dict) else None
+        if by is not None and not any(by in f for f in vocabulary.EVENTS.values()):
+            problems.append(f"detection {name}: no field {by} to count by")
         snapshot = d.get("snapshot")
-        if isinstance(snapshot, dict) and snapshot.get("section") not in vocabulary.SECTIONS:
-            problems.append(f"detection {name}: no snapshot section {snapshot.get('section')}")
+        if isinstance(snapshot, dict):
+            section = snapshot.get("section")
+            if not isinstance(section, str) or section not in vocabulary.SECTIONS:
+                problems.append(f"detection {name}: no snapshot section {section}")
+            if snapshot.get("fields"):
+                # The drafter doesn't know each section's fields yet: one it can't
+                # check could never match.
+                problems.append(
+                    f"detection {name}: a snapshot rule matches the item's key only here"
+                    " (no fields)"
+                )
     return problems
 
 
 # spending
 
 
-def estimate(system: str, messages: list[dict]) -> int:
-    chars = len(system) + len(json.dumps(messages, ensure_ascii=False))
-    return chars // CHARS_PER_TOKEN + 1
+def estimate(system: str, messages: list[dict], earlier_output: int = 0) -> int:
+    """Input tokens, high on purpose. `earlier_output`: the tokens an earlier answer in
+    the conversation used, sent back with its thinking, which is billed in full
+    though its text comes back empty."""
+    chars = len(system) + len(json.dumps(messages, ensure_ascii=False)) + len(json.dumps(SCHEMA))
+    return chars // CHARS_PER_TOKEN + 1 + earlier_output
 
 
 def worst_cost(input_tokens: int) -> float:
@@ -413,10 +526,11 @@ def allow(store: Store, worst: float, this_draft: float, past_tell: bool) -> Non
         raise DraftError(
             f"${total:.2f} spent of the plan's ${TOTAL_CAP:.2f}: this request could pass it"
         )
-    if total >= TELL_AT and not past_tell:
+    if total + worst > TELL_AT and not past_tell:
         raise DraftError(
-            f"${total:.2f} spent: John asked to be told at ${TELL_AT:.2f} before more is"
-            " spent. Once he says go on: drafter draft … --past-tell-mark"
+            f"${total:.2f} spent, and this request could take it past ${TELL_AT:.2f}, where"
+            " John asked to be told before more is spent. Once he says go on:"
+            " drafter draft … --past-tell-mark"
         )
 
 
@@ -440,9 +554,19 @@ class Draft:
         return sum(r["cost"] for r in self.requests)
 
 
-def _record(store: Store, when: str, decision: decisions.Decision, attempt: int,
-            worst: float) -> int:  # fmt: skip
+def _record(
+    store: Store,
+    when: str,
+    decision: decisions.Decision,
+    attempt: int,
+    worst: float,
+    this_draft: float,
+    past_tell: bool,
+) -> int:
+    """Check the caps and write the row in one transaction, so two drafts at once
+    can't both pass a cap only one of them fits."""
     with store.transaction():
+        allow(store, worst, this_draft, past_tell)
         cur = store.db.execute(
             "INSERT INTO ai_request (sent_at, cves, decision_id, model, attempt, cost)"
             " VALUES (?, ?, ?, ?, ?, ?)",
@@ -465,27 +589,31 @@ def draft(
     cves: list[str],
     client: Any,
     *,
-    names: set[str] = frozenset(),
+    names: set[str] | None = None,
     past_tell: bool = False,
     now=timeutil.now,
 ) -> Draft:
     """Draft an approved threat: at most two requests, each within the caps.
-    `names`: the threat's package names that would give a package away in prose."""
+    `names`: package names that would give a package away in prose (default: the
+    vendors' own for these CVEs)."""
     import anthropic  # only a draft needs it
 
     decision = approved(store, cves)
     cves = list(decision.cves)
     found = sources(store, cves)
+    if names is None:
+        names = package_names(store, cves)
     if not found:
         raise DraftError("nothing fetched about these CVEs to draft from")
     system = [{"type": "text", "text": SYSTEM, "cache_control": {"type": "ephemeral"}}]
     messages: list[dict] = [{"role": "user", "content": user_message(cves, found)}]
     requests: list[dict] = []
     checked = Checked(None, problems=["not sent"])
+    earlier_output = 0
     for attempt in range(1, MAX_ATTEMPTS + 1):
-        worst = worst_cost(estimate(SYSTEM, messages))
-        allow(store, worst, sum(r["cost"] for r in requests), past_tell)
-        row = _record(store, timeutil.fmt(now()), decision, attempt, worst)
+        worst = worst_cost(estimate(SYSTEM, messages, earlier_output))
+        row = _record(store, timeutil.fmt(now()), decision, attempt, worst,
+                      sum(r["cost"] for r in requests), past_tell)  # fmt: skip
         record = {"attempt": attempt, "cost": worst, "row": row}
         requests.append(record)
         try:
@@ -510,6 +638,13 @@ def draft(
             _settle(store, row, cost=worst, stop_reason=f"no answer: {type(exc).__name__}")
             raise DraftError(f"no answer from the API ({type(exc).__name__}); the most it"
                              f" could have cost, ${worst:.2f}, is counted") from None  # fmt: skip
+        except Exception as exc:  # noqa: BLE001
+            # Whether it reached the API can't be told: the worst case stands.
+            _settle(store, row, cost=worst, stop_reason=f"failed: {type(exc).__name__}")
+            raise DraftError(
+                f"the request failed ({type(exc).__name__}: {exc}); the most it could have"
+                f" cost, ${worst:.2f}, is counted"
+            ) from None
         record["cost"] = cost(response.usage)
         record["request_id"] = response._request_id
         record["stop_reason"] = response.stop_reason
@@ -519,6 +654,7 @@ def draft(
         else:
             checked = Checked(None, problems=[f"stopped: {response.stop_reason}"])
         usage = response.usage
+        earlier_output += usage.output_tokens or 0
         _settle(
             store,
             row,
@@ -547,8 +683,12 @@ def draft(
             },
         ]
         try:
-            allow(store, worst_cost(estimate(SYSTEM, messages)), sum(r["cost"] for r in requests),
-                  past_tell)  # fmt: skip
+            allow(
+                store,
+                worst_cost(estimate(SYSTEM, messages, earlier_output)),
+                sum(r["cost"] for r in requests),
+                past_tell,
+            )
         except DraftError as exc:
             checked.problems.append(f"not sent again: {exc}")
             break
@@ -556,6 +696,11 @@ def draft(
 
 
 # the draft file
+
+
+def _comment(text: object) -> str:
+    """One printable line, for a comment in the draft file."""
+    return " ".join("".join(ch if ch.isprintable() else " " for ch in str(text)).split())
 
 
 def render(d: Draft, made: str) -> str:
@@ -577,10 +722,12 @@ def render(d: Draft, made: str) -> str:
     lines.append(f"# Cost of this draft: ${d.cost:.4f}")
     lines.append("# Sources sent (fetched text, as kept in the store):")
     for s in d.found:
-        lines.append(f"#   {s.name}: fetch {s.fetch_id}, sha256 {s.sha256 or '?'}, {s.url}")
+        lines.append(
+            _comment(f"#   {s.name}: fetch {s.fetch_id}, sha256 {s.sha256 or '?'}, {s.url}")
+        )
     if d.checked.problems:
         lines.append("# NOT USABLE: the last answer was refused:")
-        lines += [f"#   {p}" for p in d.checked.problems]
+        lines += [f"#   {_comment(p)}" for p in d.checked.problems]
     answer = d.checked.answer
     if answer is None:
         return "\n".join(lines) + "\n"
@@ -597,6 +744,13 @@ def render(d: Draft, made: str) -> str:
         "references": answer["references"],
     }
     text = yaml.safe_dump(body, sort_keys=False, allow_unicode=False, width=88)
+    if d.checked.problems:
+        # Kept for reading, but as comments: nothing reads a refused answer as a draft.
+        lines.append("# The refused answer, for reading only:")
+        kept = [
+            "#   " + "".join(c if c.isprintable() else " " for c in ln) for ln in text.splitlines()
+        ]
+        return "\n".join(lines + kept) + "\n"
     return "\n".join(lines) + "\n" + text
 
 

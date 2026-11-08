@@ -168,7 +168,15 @@ CHECKS: dict[str, tuple[str, tuple[str, ...]]] = {  # id: (title, variants)
     ),
 }
 
-EVENTS: dict[str, tuple[str, ...]] = {  # type: its fields
+# Fields every event from a log message can carry (the line's pid, and what the
+# journal itself records); and `program`, which a rule may match on any event
+# (checker/packs/detect.py reads it from the event, not its fields).
+MESSAGE_FIELDS = ("pid", "systemd_unit", "journal_comm", "journal_uid", "audit_session", "boot_id")
+ANY_EVENT = ("program",)
+
+# Each type's own fields, as checker/events.py writes them at the pinned commit (sudo's
+# details become tty, pwd and runas; sshd's invalid becomes invalid_user).
+OWN_FIELDS: dict[str, tuple[str, ...]] = {
     "web.request": (
         "client",
         "network",
@@ -199,16 +207,48 @@ EVENTS: dict[str, tuple[str, ...]] = {  # type: its fields
     "kernel.segfault": ("comm", "pid"),
     "kernel.oom_kill": ("comm", "pid"),
     "kernel.oops": (),
+    "kernel.hung_task": (),
+    "kernel.machine_check": (),
     "kernel.module_taint": ("module",),
     "unit.failed": ("unit",),
+    "unit.starting": ("what",),
     "unit.started": ("what",),
+    "unit.stopped": ("what",),
+    "unit.finished": ("what",),
     "ssh.login.accepted": ("address", "fingerprint", "key_type", "method", "port", "user"),
-    "ssh.login.failed": ("address", "invalid", "method", "port", "user"),
-    "sudo.command": ("command", "details", "reason", "user"),
+    "ssh.login.failed": ("address", "invalid_user", "method", "port", "user"),
+    "ssh.login.too_many_failures": ("address", "invalid_user", "port", "user"),
+    "ssh.login.abandoned": ("address", "invalid_user", "port", "user"),
+    "ssh.invalid_user": ("address", "port", "user"),
+    "auth.failure": ("module", "rest", "service"),
+    "sudo.command": ("command", "user", "tty", "pwd", "runas"),
+    "sudo.failed": ("command", "reason", "user", "tty", "pwd", "runas"),
+    "sudo.denied": ("command", "reason", "user", "tty", "pwd", "runas"),
     "su.switch": ("target", "tty", "user"),
+    "su.failed": ("target", "user"),
+    "session.opened": ("by", "service", "user"),
+    "session.closed": ("by", "service", "user"),
     "account.created": ("origin", "shell", "uid", "user"),
+    "account.deleted": ("user",),
+    "account.modified": ("user",),
+    "account.renamed": ("old_user", "user"),
     "account.password_changed": ("user",),
+    "account.locked": ("user",),
+    "account.unlocked": ("user",),
+    "group.created": ("group",),
     "group.member_added": ("by", "group", "user"),
+    "group.member_removed": ("by", "group", "user"),
+    "mail.submitted": ("queue_id", "uid", "user", "sender"),
+    "mail.sent": ("queue_id", "recipient", "relay", "domain", "local"),
+    "mail.deferred": ("queue_id", "recipient", "relay", "domain", "local"),
+    "mail.bounced": ("queue_id", "recipient", "relay", "domain", "local"),
+}
+
+EVENTS: dict[str, tuple[str, ...]] = {  # type: every field a rule may match
+    etype: fields
+    + ANY_EVENT
+    + (() if etype in ("web.request", "web.error", "process.exec") else MESSAGE_FIELDS)
+    for etype, fields in OWN_FIELDS.items()
 }
 
 SECTIONS: dict[str, str] = {  # name: what it holds
