@@ -847,3 +847,72 @@ def test_a_source_address_ending_a_sentence_is_still_a_reference():
     said = "Fixed upstream, see https://github.com/google/brotli/releases/tag/v1.2.1."
     answer = _answer(references=["https://github.com/google/brotli/releases/tag/v1.2.1"])
     assert _checked(answer, said) == []
+
+
+# from the third review of A.5
+
+
+def test_a_busy_store_after_the_answer_keeps_the_answer(approved_store, monkeypatch):
+    import sqlite3
+
+    def busy(store, row, **values):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(draft, "_settle_now", busy)
+    made = _run(approved_store, Provider())
+    assert made.ok and made.requests[0]["settled"] is False
+    assert "keeps the most it could have cost" in draft.render(made, "now")
+    [row] = draft.ledger(approved_store)
+    assert not row["settled"] and row["cost"] > made.cost  # counted high, never low
+
+
+def test_a_busy_store_before_sending_sends_nothing(approved_store, monkeypatch):
+    import sqlite3
+
+    def busy(*args, **kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(draft, "allow", busy)
+    p = Provider()
+    with pytest.raises(draft.DraftError, match="nothing was sent"):
+        _run(approved_store, p)
+    assert p.sent == []
+
+
+def test_no_connection_made_costs_nothing(approved_store):
+    with pytest.raises(draft.DraftError, match="nothing was sent"):
+        _run(approved_store, Provider(fail=httpx2.ConnectError("offline")))
+    [row] = draft.ledger(approved_store)
+    assert row["cost"] == 0 and row["stop_reason"] == "not sent: ConnectError"
+
+
+def test_the_sources_own_word_for_the_software_may_be_used():
+    said = "EDK2 contains a vulnerability in BIOS. edk2-hwe ships it too."
+    names = {"edk2", "edk2-hwe"}
+    ok = _answer(title="EDK2 PXE driver out-of-bounds write (CVE-2026-111497)")
+    assert _checked(ok, said + " " + GOOD["references"][0], names) == []
+    # the sources mention edk2-hwe, so it passes too; one they don't, doesn't
+    bad = _answer(remediation=["Update edk2-ovmf-hwe."])
+    problems = _checked(
+        bad, "EDK2 contains a flaw. " + GOOD["references"][0], {"edk2", "edk2-ovmf"}
+    )
+    assert "a package name in the answer: edk2-ovmf" in problems
+
+
+@pytest.mark.parametrize("text", ["Builds before 19.4.x are affected.", "Every 8.0.x build."])
+def test_an_x_version_pattern_is_refused(text):
+    assert any("a version in the answer" in p for p in _checked(_answer(remediation=[text])))
+
+
+def test_a_reference_copied_with_its_escaped_ampersand_is_the_address():
+    url = "https://support.citrix.com/kbsearch?id=CTX696300&articleURL=x"
+    answer = _answer(references=[url.replace("&", "&amp;")])
+    found = [draft.Source("x", url, 1, None, "u", draft._urls(url))]
+    checked = draft.check(json.dumps(answer), found, set(), [CVE])
+    assert checked.problems == [] and checked.answer["references"] == [url]
+
+
+def test_out_must_be_a_writable_file(tmp_path, capsys, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", KEY)
+    assert cli.main(["--home", str(tmp_path), "draft", CVE, "--out", str(tmp_path)]) == 2
+    assert "can't write a file" in capsys.readouterr().err

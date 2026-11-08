@@ -530,8 +530,12 @@ def _draft_unlocked(home: Path, args) -> int:
             file=sys.stderr,
         )
         return 2
-    if args.out is not None and not args.out.parent.is_dir():
-        print(f"--out: no folder {safe(args.out.parent)}", file=sys.stderr)
+    if args.out is not None and (
+        not args.out.parent.is_dir()
+        or args.out.is_dir()
+        or not os.access(args.out if args.out.exists() else args.out.parent, os.W_OK)
+    ):
+        print(f"--out: can't write a file at {safe(args.out)}", file=sys.stderr)
         return 2
     try:
         store = Store(home / "drafter.sqlite3")
@@ -539,9 +543,10 @@ def _draft_unlocked(home: Path, args) -> int:
         print(safe(exc), file=sys.stderr)
         return 1
     try:
-        filled = upgrade.fill(store)
-        if filled:
-            print(filled)
+        # Unlocked, so it waits for the hourly run's writes rather than failing
+        # after an answer has been paid for. (A fill owed after a schema move is
+        # left to the hourly run and the page, which hold their own.)
+        store.db.execute("PRAGMA busy_timeout = 120000")
         return _draft(store, args, cves)
     finally:
         store.close()
@@ -564,10 +569,15 @@ def _draft(store: Store, args, cves: list[str]) -> int:
         print(safe(exc), file=sys.stderr)
         return 1
     text = draft.render(made, timeutil.fmt(timeutil.now())[:16].replace("T", " ") + " UTC")
+    written = False
     if args.out:
-        args.out.write_text(text, encoding="utf-8")
-        print(f"draft written to {safe(args.out)}")
-    else:
+        try:
+            args.out.write_text(text, encoding="utf-8")
+            written = True
+            print(f"draft written to {safe(args.out)}")
+        except OSError as exc:
+            print(f"--out couldn't be written ({safe(exc)}): here it is", file=sys.stderr)
+    if not written:
         print(safe_lines(text))
     print(
         f"this draft: ${made.cost:.4f}; spent ${draft.spent(store):.2f} of ${draft.TOTAL_CAP:.2f}"

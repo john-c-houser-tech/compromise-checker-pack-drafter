@@ -12,7 +12,8 @@ a person reviews and signs everything it writes.
 
 Give the CVEs of one approve, all of them: a threat is drafted as it was approved.
 Without `ANTHROPIC_API_KEY` set, nothing is sent or recorded. A draft doesn't take
-the hourly run's lock: it writes only its spending rows, each with the caps checked
+the hourly run's lock (and leaves a fill owed after a schema move to the hourly run
+and the page): it writes only its spending rows, each with the caps checked
 in the same transaction as the row, so the hourly run and a draft never turn each
 other away. `--dry-run` also says when a real run would stop (exit 1).
 The packages section is not here: `drafter fill` writes it from vendor data (A.3),
@@ -53,12 +54,14 @@ An answer is refused when:
   have at that commit (the checker would read it as a typo that never matches), or
   matches a snapshot item's fields (the drafter doesn't know each section's fields
   yet, so a snapshot rule matches the item's key only);
-- a reference isn't, exactly, an address found in the sources' words;
+- a reference isn't, exactly, an address found in the sources' words (one copied
+  with the `&amp;` it was sent as is read as the address);
 - it holds a version outside a URL: three numbers however written (1.2.1, v1.2.1,
   1.2.1rc1, but not a four-number address such as 127.0.0.1), a version pattern
-  (1.2.*), or a vendor build (1.0.9-2ubuntu0.1); or any package name the vendors give
-  for these CVEs, on any release, that carries a digit or a sign (dotnet8, openjdk-18,
-  edk2-hwe), in any case. Two-number figures (a CVSS score of 9.8, .NET 8.0) aren't
+  (1.2.*, 8.0.x), or a vendor build (1.0.9-2ubuntu0.1); or any package name the
+  vendors give for these CVEs, on any release, that carries a digit or a sign
+  (dotnet8, openjdk-18, edk2-hwe), anywhere and in any case, unless the sources
+  themselves use it as a word for the software (every source calls it EDK2). Two-number figures (a CVSS score of 9.8, .NET 8.0) aren't
   versions of a package here. Both are looked for in the answer as sent and as
   read, so a YAML escape (`1\x2E2\x2E1`) hides nothing.
 
@@ -89,7 +92,11 @@ off at the allowance (`max_tokens`) is recorded and reported, not tried again. E
 it is sent, at that worst case, then settled with the real figures. A request that
 got no answer (a timeout, a dropped connection) keeps its worst case, since it may
 still have run, as does any other failure once the row is written; one the API
-turned away (HTTP 4xx or 5xx) costs nothing. The record
+turned away (HTTP 4xx or 5xx), or that never reached it (no connection made: offline,
+DNS), costs nothing. A store too busy to write the row stops the draft before
+anything is sent; one too busy to settle it (after two minutes' wait) leaves the
+row at its worst, which only overcounts, and the answer goes into the draft file,
+which says so. An `--out` that can't be written is refused before anything is sent. The record
 can't be deleted. `drafter spend` lists it.
 
 If the model declines (a `refusal`), that is recorded and reported, and nothing else
