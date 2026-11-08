@@ -18,7 +18,9 @@ a page to approve or reject each threat, whose cards say whether it's attacked, 
 it is, who can reach it and whether a signed pack covers it
 ([`docs/web.md`](docs/web.md)), and A.5 drafts an approved threat's title,
 detections and remediation with an AI, within set caps, and A.6 holds what it
-writes to the sources ([`docs/draft.md`](docs/draft.md)).
+writes to the sources ([`docs/draft.md`](docs/draft.md)). In Stage 3, A.7 assembles
+a pack in a clone of the packs repository for signing by hand
+([`docs/assemble.md`](docs/assemble.md)).
 The plan is in
 [`plans/pack-application-plan-2026-10-31.md`](plans/pack-application-plan-2026-10-31.md).
 
@@ -33,6 +35,7 @@ The plan is in
     .venv/bin/drafter decisions
     .venv/bin/drafter draft CVE-… [--dry-run] [--out FILE]   # ANTHROPIC_API_KEY set
     .venv/bin/drafter spend
+    .venv/bin/drafter pack template|write|check …   # A.7: a pack for signing by hand
 
 ## Licence
 

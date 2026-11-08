@@ -29,7 +29,17 @@ import urllib.parse
 from pathlib import Path
 
 from drafter import __version__, candidates, decisions, fill, thirdparty, timeutil, upgrade
-from drafter.feeds import CVE_ID, Context, all_feeds, by_name, nvd, run_feeds, run_one, seed_feed
+from drafter.feeds import (
+    CVE_ID,
+    Context,
+    FeedError,
+    all_feeds,
+    by_name,
+    nvd,
+    run_feeds,
+    run_one,
+    seed_feed,
+)
 from drafter.feeds.osv import Osv
 from drafter.http import Fetcher
 from drafter.status import needing_a_look, report
@@ -171,6 +181,30 @@ def _parser() -> argparse.ArgumentParser:
     )
     commands.add_parser("spend", help="every request sent to the AI, and the caps (A.5)")
 
+    packing = commands.add_parser("pack", help="assemble an approved, drafted threat's pack (A.7)")
+    pack_actions = packing.add_subparsers(dest="action", required=True)
+    tmpl = pack_actions.add_parser("template", help="an assembly file to edit, from a draft")
+    tmpl.add_argument("--draft", type=Path, required=True, help="the reviewed draft file")
+    tmpl.add_argument("--packs", type=Path, required=True, help="a clone of the packs repository")
+    tmpl.add_argument("--out", type=Path, help="write it here (default: print it)")
+    writing = pack_actions.add_parser(
+        "write", help="the pack, on a new branch of the packs clone, frozen for signing"
+    )
+    writing.add_argument("assembly", type=Path, help="the assembly file (TOML)")
+    writing.add_argument(
+        "--packs", type=Path, required=True, help="a clone of the packs repository"
+    )
+    checking = pack_actions.add_parser(
+        "check", help="after signing: the frozen file, its signature, then the index"
+    )
+    checking.add_argument("id", help="the pack's id")
+    checking.add_argument(
+        "--packs", type=Path, required=True, help="a clone of the packs repository"
+    )
+    checking.add_argument(
+        "--checker", default="checker", help="the checker's command (default: %(default)s)"
+    )
+
     web = commands.add_parser("web", help="the candidate page, to approve or reject (A.4)")
     web.add_argument("--port", type=int, default=8089, help="on 127.0.0.1 (default: %(default)s)")
     web.add_argument(
@@ -213,8 +247,10 @@ def main(argv: list[str] | None = None) -> int:
     known = by_name()
     if args.command == "web":
         return _web(home, args)
-    if args.command in ("decisions", "spend") or (
-        args.command == "draft" and getattr(args, "dry_run", False)
+    if (
+        args.command in ("decisions", "spend")
+        or (args.command == "draft" and getattr(args, "dry_run", False))
+        or (args.command == "pack" and args.action in ("template", "check"))
     ):
         try:
             store = _reader(home / "drafter.sqlite3")
@@ -226,6 +262,8 @@ def main(argv: list[str] | None = None) -> int:
                 return _spend(store)
             if args.command == "draft":
                 return _draft_dry(store, args)
+            if args.command == "pack":
+                return _pack_read(store, args)
             return _decisions(store)
         finally:
             store.close()
@@ -267,6 +305,8 @@ def main(argv: list[str] | None = None) -> int:
             return _candidates_write(ctx, args)
         if args.command == "fill":
             return _fill(ctx, args)
+        if args.command == "pack":
+            return _pack_write(ctx, args)
         if args.command == "propose":
             return _propose(ctx, args)
         if args.action == "fetch":
@@ -585,6 +625,108 @@ def _draft(store: Store, args, cves: list[str]) -> int:
     if not made.ok:
         print("NOT USABLE: the answer was refused (the reasons are in the draft)", file=sys.stderr)
         return 1
+    return 0
+
+
+def _pack_read(store: Store, args) -> int:
+    from drafter import assemble, draft
+
+    try:
+        if args.action == "template":
+            text = assemble.template(store, args.draft, args.packs)
+            if args.out:
+                if args.out.exists():
+                    print(f"{safe(args.out)} is there already: not overwritten", file=sys.stderr)
+                    return 1
+                args.out.write_text(text, encoding="utf-8")
+                print(f"assembly file written to {safe(args.out)}: fill in what it asks")
+            else:
+                print(safe_lines(text))
+            return 0
+        done = assemble.check(store, args.id, args.packs, checker=args.checker)
+    except (assemble.AssembleError, draft.DraftError, OSError) as exc:
+        print(safe_lines(str(exc)), file=sys.stderr)
+        return 1
+    clone = safe(args.packs)
+    print(safe(f"{done.path}: unchanged since it was frozen; signed by pack key"
+               f" {assemble.key_id(done.key)}, trusted comment {done.comment!r}."))  # fmt: skip
+    sign_index = f"minisign -S -s {assemble.PACK_KEY} -m {clone}/index.yaml"
+    if done.index == "signed":
+        print("index.yaml lists it, and its signature is good.")
+        print(
+            f"Left to do: in {clone}, commit packs/{safe(args.id)} (the pack and its signature)"
+            " with index.yaml and its signature, push the branch and open a pull request into"
+            " dev. Before it is merged: check every version and date against the vendors' own"
+            " pages, and prove it on throwaway servers (A.8). Don't touch a file after signing."
+        )
+        return 0
+    if done.index == "unsigned":
+        print("index.yaml already lists it (written by an earlier check), but isn't signed yet.")
+    else:
+        print(safe_lines(done.index_output))
+    print(f"Sign the index by hand: {sign_index}")
+    print(f"Then run this check again: drafter pack check {safe(args.id)} --packs {clone}"
+          f"{_checker_hint(args.checker)}")  # fmt: skip
+    return 0
+
+
+def _checker_hint(checker: str) -> str:
+    import shutil
+
+    return "" if shutil.which(checker) else " --checker /path/to/checker"
+
+
+def _pack_write(ctx: Context, args) -> int:
+    from drafter import assemble, draft, fill, thirdparty
+    from drafter.http import FetchError
+
+    try:
+        a = assemble.read_assembly(args.assembly)
+        done = assemble.write(ctx.store, ctx, a, args.packs, now=ctx.now)
+    except (
+        assemble.AssembleError,
+        draft.DraftError,
+        fill.FillError,
+        thirdparty.ThirdPartyError,
+        FetchError,
+        FeedError,
+        OSError,
+    ) as exc:
+        print(safe_lines(str(exc)), file=sys.stderr)
+        return 1
+    clone = safe(args.packs)
+    print(safe_lines(done.diff) if done.diff else "(a new pack: nothing to compare with)")
+    print()
+    print(safe_lines(done.report))
+    if done.replaced:
+        print("PACKAGES JUDGED FROM OTHER CVEs (the assembly file's packages_from):")
+        for line in done.replaced:
+            print(safe(f"  {line}"))
+    if done.needs_a_person:
+        print("NEEDS A PERSON (the vendor data left these out or couldn't say):")
+        for line in done.needs_a_person:
+            print(safe(f"  {line}"))
+    if done.notes:
+        print("CHECK BEFORE SIGNING: what the prose and references point people at:")
+        for note in done.notes:
+            print(safe(f"  {note}"))
+    if done.edits is None:
+        print("The prose: no accepted AI answer on record to compare the draft with.")
+    elif done.edits:
+        print(safe(f"The prose: edited after the AI wrote it ({', '.join(done.edits)})."))
+    else:
+        print("The prose: as the AI wrote it, unedited.")
+    print(safe(f"Written to {done.path}, read-only, on branch {done.branch} (from {done.base})."))
+    print(f"SHA-256: {done.sha256}")
+    print(
+        safe(
+            f"To review it yourself: git -C {clone} diff {assemble.BASE_BRANCH};"
+            f" sha256sum {done.path}"
+        )
+    )
+    print("Then sign it (a person, by hand):")
+    print(safe(f"  {assemble.sign_command(done.path, a.id, a.version)}"))
+    print(safe(f"Then: drafter pack check {a.id} --packs {clone}{_checker_hint('checker')}"))
     return 0
 
 
