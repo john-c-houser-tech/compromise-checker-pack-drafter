@@ -931,3 +931,21 @@ def test_bidi_and_control_characters_in_fetched_text_dont_reach_the_page(page):
     card = _card_html(html, PHP[0])
     assert flip not in html and "\x1b" not in html
     assert "A flaw in PHP [31m." in card and "CISA: PHP</div>" in card
+
+
+def test_a_reject_added_by_hand_comes_back_when_cisa_confirms_it(page):
+    def seed(s):
+        _rated_only(s, DOTNET)
+        s.db.execute(
+            "INSERT INTO manual (cve, added_at, note) VALUES (?, ?, 'heard of attacks')",
+            (DOTNET, "2026-10-20T00:00:00.000000Z"),
+        )
+
+    _with(page, seed)
+    body = page.form(cves=DOTNET, families="dotnet", verdict="reject", reason="rumour only")
+    assert page.post(body)[0].status == 303
+    assert _stored(page)[0].signs == (f"manual:{DOTNET}",)
+    _with(page, lambda s: _kev(s, DOTNET, "2026-11-07"))
+    _, html = page.request("GET")
+    card = _card_html(html, DOTNET)
+    assert "Look again" in card and "Attacks reported since:</strong> on CISA&#39;s list" in card

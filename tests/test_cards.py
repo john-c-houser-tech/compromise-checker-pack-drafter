@@ -649,3 +649,37 @@ def test_a_cut_doesnt_lose_a_long_run_without_spaces():
     text = "Statement " + "x" * 2000
     got = cards._cut(text)
     assert got.startswith("Statement xxx") and len(got) == cards.WORDS_CUT + 2
+
+
+# from the third review of A.4b
+
+
+def test_a_schema_5_store_without_the_refill_table_gets_one_and_owes_a_fill(tmp_path):
+    path = tmp_path / "drafter.sqlite3"
+    s = Store(path)
+    s.db.execute("DROP TABLE refill")
+    s.close()
+    s = Store(path)
+    assert upgrade.fill(s) is not None and upgrade.fill(s) is None
+    s.close()
+
+
+def test_cisas_names_lose_bidi_characters_wherever_they_are_shown(store):
+    from tests.test_candidates import _fid, _nvd
+
+    flip = chr(0x202E)
+    store.upsert(
+        "kev",
+        {
+            "cve": A,
+            "date_added": "2026-10-21",
+            "vendor": "SonicWall",
+            "product": f"SonicOS{flip}evil",
+            "name": None,
+            "fetch_id": _fid(store),
+        },
+        ("cve",),
+    )
+    _nvd(store, A, "2026-10-21T00:00:00.000000Z", products=())
+    [cand] = [x for x in c.classify(store, "2026-10-01T00:00:00.000000Z") if x.cve == A]
+    assert cand.kev_name == "SonicWall SonicOS evil"

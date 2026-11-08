@@ -153,20 +153,28 @@ def attack_signs(threat: Threat) -> dict[str, str]:
     }
 
 
+CISA_SIGNS = ("kev", "nvd")  # CISA's list and CISA's "active": one source of evidence
+
+
 def attacked_since(decision: Decision, threat: Threat) -> tuple[str, ...]:
-    """Signs of attacks on a reject's CVEs that had none when it was made, described.
-    A CVE already attacked then (CISA said active) doesn't bring it back when CISA
-    lists it too: that's the same evidence, and the reject was made knowing it.
-    Only a reject comes back this way, and only one that kept its signs (schema 5
-    on). CVEs the reject didn't cover are another matter ("came after it")."""
+    """New signs of attacks on a reject's own CVEs, described. A sign is news when
+    its CVE had none of its kind of evidence then: CISA listing a CVE it already
+    called active is the same evidence, and the reject was made knowing it; but
+    CISA confirming a CVE that was only added by hand is news. Only a reject comes
+    back this way, and only one that kept its signs (schema 5 on). CVEs the reject
+    didn't cover are another matter ("came after it")."""
     if decision.verdict != "reject" or decision.signs is None:
         return ()
-    had = {key.split(":", 1)[1] for key in decision.signs}
-    return tuple(
-        text
-        for key, text in sorted(attack_signs(threat).items())
-        if key.split(":", 1)[1] in decision.cves and key.split(":", 1)[1] not in had
-    )
+    had_cisa = {k.split(":", 1)[1] for k in decision.signs if k.split(":", 1)[0] in CISA_SIGNS}
+    had_any = {k.split(":", 1)[1] for k in decision.signs}
+    out = []
+    for key, text in sorted(attack_signs(threat).items()):
+        kind, cve = key.split(":", 1)
+        if cve not in decision.cves or key in decision.signs:
+            continue
+        if cve not in (had_cisa if kind in CISA_SIGNS else had_any):
+            out.append(text)
+    return tuple(out)
 
 
 def shown_signs(threat: Threat) -> str:

@@ -105,14 +105,15 @@ window, 30 days by default).
 - **A reject comes back if attacks are reported after it.** Each decision keeps
   the signs of attacks it was made with (on CISA's list, CISA's "active", added by
   hand), CVE by CVE. A reject reads **Look again** when one of its CVEs that had no
-  sign of attacks gains one, even after the 30 days (as far back as the page
-  reads). A CVE already attacked when it was rejected doesn't come back when CISA
-  lists it too: that's the same evidence, and the reject was made knowing it. A
-  sign re-dated (CISA re-stamps its ratings in batches) isn't a new one. An approve
-  doesn't come back this way, and nor does a reject made before schema 5, which
-  didn't keep its signs. The form carries the signs its card showed, so a decision
-  sent from a page loaded before a new sign arrived is refused (409) and the
-  threat shown as it now stands, the reason kept in its box.
+  sign of attacks gains one, or one only added by hand gains CISA's, even after the
+  30 days (as far back as the page reads). A CVE CISA already called attacked
+  doesn't come back when CISA lists it too: that's the same evidence, and the
+  reject was made knowing it. A sign re-dated (CISA re-stamps its ratings in
+  batches) isn't a new one. An approve doesn't come back this way, and nor does a
+  reject made before schema 5, which didn't keep its signs. The form carries the
+  signs its card showed, so a decision sent from a page loaded before a new sign
+  arrived is refused (409) and the threat shown as it now stands, the reason kept
+  in its box.
 - **Checked against the list as it is now.** A form for a threat whose CVEs,
   section or package families changed since the page loaded is refused (409);
   the page shows the threat as it now stands, with the reason kept in its box.

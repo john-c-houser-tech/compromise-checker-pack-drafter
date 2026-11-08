@@ -323,6 +323,14 @@ class Store:
             with self.transaction():
                 self.db.execute("DROP TABLE vendor_cve")
                 self.db.execute(f"CREATE TABLE vendor_cve{create});")
+        # A store moved to schema 5 before the fill was marked owed (early A.4b code)
+        # has no refill table: make it, and owe the fill, since its values may be old.
+        if not self.db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'refill'"
+        ).fetchone():
+            with self.transaction():
+                self.db.execute("CREATE TABLE refill (schema INTEGER PRIMARY KEY)")
+                self.db.execute("INSERT INTO refill (schema) VALUES (5)")
         # Schema 5's columns, on a table rebuilt from the early shape above.
         for table, column in (
             ("nvd", "cvss"),

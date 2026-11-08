@@ -632,7 +632,8 @@ def classify(
             f"SELECT cve, vendor, product FROM kev WHERE cve IN ({marks})",  # noqa: S608
             batch,
         ):
-            kev_names[cve] = " ".join(x for x in (vendor, product) if x)
+            # Fetched text, shown on the page and in the list: one printable line.
+            kev_names[cve] = _text_or_none(" ".join(x for x in (vendor, product) if x))
     for cand in sorted_out:
         # NVD's product names, and CISA's own names beside them (not instead: CISA
         # writes "PHP Group", NVD writes php:php).
