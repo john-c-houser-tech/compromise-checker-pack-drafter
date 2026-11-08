@@ -16,7 +16,7 @@ PAGE = 20
 MAX_PAGES_PER_RUN = 200
 LOOKBACK = dt.timedelta(days=3)
 MAX_BYTES = 32 * 1024 * 1024
-USN_ID = re.compile(r"^(USN|LSN)-\d{1,6}-\d{1,3}$")
+USN_ID = re.compile(r"\A(USN|LSN)-\d{1,6}-\d{1,3}\Z")
 
 
 class Usn(Feed):

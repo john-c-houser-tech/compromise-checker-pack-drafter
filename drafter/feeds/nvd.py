@@ -143,12 +143,13 @@ def parse(body: bytes) -> tuple[int, int, list[dict]]:
                 "kev_added": added[:10] if isinstance(added, str) else None,
                 "products": json.dumps(products(cve.get("configurations"))),
                 "description": description(cve.get("descriptions")),
+                "cvss": cvss(cve.get("metrics")),
             }
         )
     return data["totalResults"], len(entries), rows
 
 
-_CPE_PART = re.compile(r"^[a-z0-9][a-z0-9._\\/:~!-]{0,80}$")  # ":" only escaped, as "\\:"
+_CPE_PART = re.compile(r"\A[a-z0-9][a-z0-9._\\/:~!-]{0,80}\Z")  # ":" only escaped, as "\\:"
 MAX_PRODUCTS = 200  # a cut could drop a watched name, so the cap is only a guard
 
 
@@ -171,7 +172,7 @@ def products(configurations: object) -> list[str]:
     return sorted(found)[:MAX_PRODUCTS]
 
 
-MAX_DESCRIPTION = 4000  # matched whole; never printed
+MAX_DESCRIPTION = 4000  # matched whole; shown cut short, escaped (A.4b)
 
 
 def description(descriptions: object) -> str | None:
@@ -186,8 +187,8 @@ def description(descriptions: object) -> str | None:
 
 
 def reparse_products(store) -> int:
-    """Fill `products` and `description` for stored CVEs from the NVD pages already
-    kept: no fetching."""
+    """Fill `products`, `description` and `cvss` for stored CVEs from the NVD pages
+    already kept: no fetching."""
     count = 0
     pages = [r[0] for r in store.db.execute("SELECT DISTINCT fetch_id FROM nvd")]
     for fetch_id in pages:
@@ -201,11 +202,73 @@ def reparse_products(store) -> int:
         with store.transaction():
             for row in rows:
                 cursor = store.db.execute(
-                    "UPDATE nvd SET products = ?, description = ? WHERE cve = ? AND fetch_id = ?",
-                    (row["products"], row["description"], row["cve"], fetch_id),
+                    "UPDATE nvd SET products = ?, description = ?, cvss = ?"
+                    " WHERE cve = ? AND fetch_id = ?",
+                    (row["products"], row["description"], row["cvss"], row["cve"], fetch_id),
                 )
                 count += cursor.rowcount
     return count
+
+
+# The score a card shows, in this order (A.4b): NVD's own CVSS 3.1, then the
+# reporting organisation's, then 3.0 the same way, then 4.0.
+_CVSS_ORDER = (
+    ("cvssMetricV31", "Primary"),
+    ("cvssMetricV31", "Secondary"),
+    ("cvssMetricV30", "Primary"),
+    ("cvssMetricV30", "Secondary"),
+    ("cvssMetricV40", "Primary"),
+    ("cvssMetricV40", "Secondary"),
+)
+# Values are a letter, but 4.0's Provider Urgency is a word (U:Amber).
+CVSS_VECTOR = re.compile(r"\ACVSS:(3\.0|3\.1|4\.0)(/[A-Z]{1,3}:[A-Za-z]{1,10})+\Z")
+_SOURCE = re.compile(r"\A[A-Za-z0-9._@+-]{1,100}\Z")
+
+
+# CISA's own scores, added to other organisations' CVEs (its "ADP" role), which NVD
+# names by this id rather than an address. They come after the reporter's.
+CISA_ADP = "134c704f-9b21-4f2e-91b3-4a467353bcc0"
+
+
+def cvss(metrics: object) -> str | None:
+    """The one CVSS score a card shows, as JSON {version, vector, score, source}."""
+    if not isinstance(metrics, dict):
+        return None
+    for cisa_pass in (False, True):
+        found = _first_score(metrics, cisa_pass)
+        if found:
+            return found
+    return None
+
+
+def _first_score(metrics: dict, cisa_pass: bool) -> str | None:
+    for key, kind in _CVSS_ORDER:
+        items = metrics.get(key)
+        for item in items if isinstance(items, list) else []:
+            if not isinstance(item, dict) or item.get("type") != kind:
+                continue
+            if (item.get("source") == CISA_ADP) != cisa_pass:
+                continue
+            data = item.get("cvssData")
+            if not isinstance(data, dict):
+                continue
+            vector, score = data.get("vectorString"), data.get("baseScore")
+            if not isinstance(vector, str) or len(vector) > 300 or not CVSS_VECTOR.match(vector):
+                continue
+            if isinstance(score, bool) or not isinstance(score, int | float):
+                continue
+            if not 0 <= score <= 10:
+                continue
+            source = item.get("source")
+            return json.dumps(
+                {
+                    "version": vector.split("/", 1)[0].removeprefix("CVSS:"),
+                    "vector": vector,
+                    "score": round(float(score), 1),
+                    "source": source if isinstance(source, str) and _SOURCE.match(source) else "",
+                }
+            )
+    return None
 
 
 def _ssvc(metrics: object) -> tuple[str | None, str | None]:

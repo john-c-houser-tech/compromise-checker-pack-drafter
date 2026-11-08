@@ -9,11 +9,14 @@ fill in. A person approves every pack, and signs it by hand.
 The drafter reads only public data. It holds no signing key, no GitHub token and
 no evidence from anyone's machines, so it can't publish anything by itself.
 
-**Status:** Stage 1 is being built. A.1 reads the feeds
+**Status:** Stage 1 is built. A.1 reads the feeds
 ([`docs/feeds.md`](docs/feeds.md)), A.2 lists the candidates
 ([`docs/candidates.md`](docs/candidates.md)), A.3 drafts a threat's packages from
 vendor data ([`docs/fill.md`](docs/fill.md)) and proposes third-party builds for a
-person to confirm ([`docs/thirdparty.md`](docs/thirdparty.md)).
+person to confirm ([`docs/thirdparty.md`](docs/thirdparty.md)). Stage 2 goes as far
+as A.4 for now: a page to approve or reject each threat, whose cards say whether
+it's attacked, what it is, who can reach it and whether a signed pack covers it
+([`docs/web.md`](docs/web.md)).
 The plan is in
 [`plans/pack-application-plan-2026-10-31.md`](plans/pack-application-plan-2026-10-31.md).
 
@@ -24,6 +27,8 @@ The plan is in
     .venv/bin/drafter candidates list [--all]
     .venv/bin/drafter propose CVE-… --binaries GLOB… --out proposals.toml
     .venv/bin/drafter fill CVE-… --binaries GLOB… [--thirdparty proposals.toml] [--compare PACK.yaml]
+    .venv/bin/drafter web [--packs ../compromise-checker-packs]   # https://packs.localhost:8443, through Caddy
+    .venv/bin/drafter decisions
 
 ## Licence
 

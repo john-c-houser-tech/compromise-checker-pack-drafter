@@ -76,3 +76,15 @@ def report(store: Store, feeds: list[Feed], now: dt.datetime) -> list[FeedReport
             )
         )
     return out
+
+
+def needing_a_look(store: Store, now: dt.datetime) -> list[str]:
+    """One line for each feed that isn't fine, for the candidate list and page."""
+    from drafter.candidates import VendorRecords
+    from drafter.feeds import all_feeds
+
+    return [
+        f"{r.feed}: {r.state}, {r.detail}"
+        for r in report(store, [*all_feeds(), VendorRecords("", 0)], now)
+        if not r.ok
+    ]

@@ -44,13 +44,16 @@ SIGNAL_NAMES = {
     "manual": "added by hand",
 }
 
-_UBUNTU_RELEASE = re.compile(r"^Ubuntu:(\d{2})\.(\d{2})(?::LTS)?$")
-_RH_CPE = re.compile(r"^cpe:/[aoh]:redhat:([a-z0-9_]+)(?::([0-9][0-9.]*))?(?::.*)?$")
-_RH_BASE = re.compile(r"^(enterprise_linux(_eus)?|rhel_(eus|aus|e4s|tus|els|extras))$")
+_UBUNTU_RELEASE = re.compile(r"\AUbuntu:(\d{2})\.(\d{2})(?::LTS)?\Z")
+_RH_CPE = re.compile(r"\Acpe:/[aoh]:redhat:([a-z0-9_]+)(?::([0-9][0-9.]*))?(?::.*)?\Z")
+_RH_BASE = re.compile(r"\A(enterprise_linux(_eus)?|rhel_(eus|aus|e4s|tus|els|extras))\Z")
 _RH_EL = re.compile(r"(?:::|\.)el(\d{1,2})")
-_PACKAGE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,120}$")
+_PACKAGE = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._+-]{0,120}\Z")
 # Red Hat's package_state values meaning "affected, no fixed build yet".
 VENDOR_SIGNALS = ("ubuntu", "redhat")  # signal kinds that are a vendor's own rating
+# Signs that someone is attacking it (A.4b): CISA's list, CISA's "active", or a
+# person adding it by hand. A sign of these that comes after a reject brings it back.
+ATTACK_SIGNALS = ("kev", "nvd", "manual")
 _RH_UNFIXED = {"affected", "fix deferred", "will not fix", "under investigation"}
 
 
@@ -241,8 +244,8 @@ def parse_ubuntu(body: bytes) -> tuple[str | None, list[dict]]:
     return published, _unique(packages)
 
 
-_EPOCH = re.compile(r"^(.+)-\d+$")
-_NVR = re.compile(r"^(.+)-[^-]+-[^-]*\.el\d+[^-]*$")
+_EPOCH = re.compile(r"\A(.+)-\d+\Z")
+_NVR = re.compile(r"\A(.+)-[^-]+-[^-]*\.el\d+[^-]*\Z")
 
 
 def _rh_name(package: str) -> str | None:
@@ -317,6 +320,30 @@ def parse_redhat(body: bytes) -> tuple[str | None, list[dict]]:
                 {"release": release, "package": name, "fixed": False, "product": product}
             )
     return _time_or_none(data.get("public_date")), _unique(packages)
+
+
+MAX_TEXT = 4000  # Red Hat's title and statement, kept cut short; shown escaped
+
+
+def _text_or_none(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = " ".join("".join(ch if ch.isprintable() else " " for ch in value).split())
+    return text[:MAX_TEXT] or None
+
+
+def redhat_text(body: bytes) -> tuple[str | None, str | None]:
+    """Red Hat's own words on a CVE, for its card (A.4b): (bug title, statement).
+    Untrusted text, kept and shown only."""
+    try:
+        data = json.loads(body)
+    except (ValueError, UnicodeDecodeError, RecursionError):
+        return None, None
+    if not isinstance(data, dict):
+        return None, None
+    bug = data.get("bugzilla")
+    title = _text_or_none(bug.get("description")) if isinstance(bug, dict) else None
+    return title, _text_or_none(data.get("statement"))
 
 
 def _time_or_none(value: object) -> str | None:
@@ -453,9 +480,11 @@ def reparse(store: Store) -> int:
                 published, packages = parse(body)
             except FeedError:
                 continue
+            title, statement = redhat_text(body) if vendor == "redhat" else (None, None)
             store.db.execute(
-                "UPDATE vendor_cve SET published = ?, packages = ? WHERE cve = ? AND vendor = ?",
-                (published, json.dumps(packages), cve, vendor),
+                "UPDATE vendor_cve SET published = ?, packages = ?, title = ?, statement = ?"
+                " WHERE cve = ? AND vendor = ?",
+                (published, json.dumps(packages), title, statement, cve, vendor),
             )
             count += 1
     return count
@@ -469,7 +498,7 @@ def _refresh_one(ctx: Context, cve: str, vendor: str) -> None:
     except FetchError as exc:
         if exc.status != 404:
             raise
-        found, published, packages = 0, None, []
+        found, published, packages, title, statement = 0, None, [], None, None
         fetch_id = ctx.store.db.execute(
             "SELECT MAX(id) FROM fetches WHERE feed = ? AND url = ?", (feed, url)
         ).fetchone()[0]
@@ -477,6 +506,7 @@ def _refresh_one(ctx: Context, cve: str, vendor: str) -> None:
         found = 1
         parse = parse_ubuntu if vendor == "ubuntu" else parse_redhat
         published, packages = parse(answer.body)
+        title, statement = redhat_text(answer.body) if vendor == "redhat" else (None, None)
     with ctx.store.transaction():
         ctx.store.upsert(
             "vendor_cve",
@@ -489,6 +519,8 @@ def _refresh_one(ctx: Context, cve: str, vendor: str) -> None:
                 "found": found,
                 "published": published,
                 "packages": json.dumps(packages),
+                "title": title,
+                "statement": statement,
                 "fetch_id": fetch_id,
             },
             ("cve", "vendor"),
@@ -523,7 +555,7 @@ _UBUNTU_KERNEL = re.compile(
     r"^linux(-(signed|meta|restricted-modules|restricted-signatures|unsigned))?"
     r"(-(allwinner|aws|azure|bluefield|dell|euclid|fips|gcp|gke|gkeop|hwe|ibm|intel|iot|kvm"
     r"|lowlatency|lts|mtk|nvidia|oem|oracle|raspi|realtime|riscv|snapdragon|starfive|vmware"
-    r"|xilinx)([-.a-z0-9]*)?)?$"
+    r"|xilinx)([-.a-z0-9]*)?)?\Z"
 )
 
 
@@ -600,7 +632,8 @@ def classify(
             f"SELECT cve, vendor, product FROM kev WHERE cve IN ({marks})",  # noqa: S608
             batch,
         ):
-            kev_names[cve] = " ".join(x for x in (vendor, product) if x)
+            # Fetched text, shown on the page and in the list: one printable line.
+            kev_names[cve] = _text_or_none(" ".join(x for x in (vendor, product) if x))
     for cand in sorted_out:
         # NVD's product names, and CISA's own names beside them (not instead: CISA
         # writes "PHP Group", NVD writes php:php).
@@ -715,8 +748,14 @@ def _releases(packages: list[dict]) -> str:
 
 
 def render(
-    candidates: list[Candidate], since: str, feed_notes: list[str], *, show_all: bool = False
+    candidates: list[Candidate],
+    since: str,
+    feed_notes: list[str],
+    *,
+    show_all: bool = False,
+    decided=None,
 ) -> str:
+    """`decided`: a threat's decision line (A.4), for the sections a person decides."""
     lines = []
     if feed_notes:
         lines.append("Feeds needing a look (the list may be missing threats):")
@@ -748,6 +787,8 @@ def render(
                 for cand in group.candidates:
                     via += [v for v in cand.watched_via if v not in via]
                 lines.append(f"      matched: {'; '.join(via) or 'NVD names the product'}")
+            if decided is not None and kind in ("judge", "thirdparty"):
+                lines.append(f"      decision: {decided(group)}")
             sigs = sorted({s.describe() for c in group.candidates for s in c.signals})
             lines.append(f"      signals: {'; '.join(sigs)}")
             if kind == "judge":

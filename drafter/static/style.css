@@ -1,0 +1,254 @@
+@font-face {
+  font-family: "Atkinson Hyperlegible";
+  src: url("/fonts/atkinson-hyperlegible-latin-400-normal.woff2") format("woff2");
+  font-weight: 400;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Atkinson Hyperlegible";
+  src: url("/fonts/atkinson-hyperlegible-latin-700-normal.woff2") format("woff2");
+  font-weight: 700;
+  font-display: swap;
+}
+/* The pack drafter, beside Compromise Checker: its tokens (NouriLoop's green, warm
+   off-white, the Coil mark). Light and dark follow the browser. Green is the
+   controls; red and amber only say a threat was rejected or needs a look again. */
+:root {
+  color-scheme: light;
+  --ground: #fbfaf7;
+  --sheet: #ffffff;
+  --ink: #1e2420;
+  --quiet: #56615a;
+  --rule: #e3e0d6;
+  --chip: #efede6;
+  --code: #f3f2ec;
+  --bar: #173a2b;
+  --on-bar: #f2f6f3;
+  --bar-quiet: #c7d6cd;
+  --accent: #2f6b4f;
+  --on-accent: #ffffff;
+  --accent-soft: #e6f0ea;
+  --critical: #b4232f;
+  --elevated: #a16207;
+  --wash: 10%;
+  --shadow: 0 1px 2px rgba(30, 36, 32, 0.06), 0 4px 14px rgba(30, 36, 32, 0.05);
+  --radius: 14px;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --ground: #0e1411;
+    --sheet: #141c18;
+    --ink: #eef2ef;
+    --quiet: #a3b0a8;
+    --rule: #26312b;
+    --chip: #1b2520;
+    --code: #1b2520;
+    --bar: #0a100d;
+    --on-bar: #eef2ef;
+    --bar-quiet: #a3b0a8;
+    --accent: #7cc3a0;
+    --on-accent: #0b1510;
+    --accent-soft: rgba(124, 195, 160, 0.16);
+    --critical: #ff8a95;
+    --elevated: #f0b84a;
+    --wash: 14%;
+    --shadow: none;
+  }
+}
+
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--ink);
+  font: 16px/1.5 "Atkinson Hyperlegible", system-ui, sans-serif;
+}
+a { color: var(--accent); }
+a:focus-visible, button:focus-visible, textarea:focus-visible, summary:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+code {
+  background: var(--code);
+  padding: 0.05em 0.35em;
+  border-radius: 6px;
+  font-size: 0.92em;
+}
+
+.bar { background: var(--bar); color: var(--on-bar); }
+.bar-in {
+  max-width: 980px;
+  margin: 0 auto;
+  padding: 14px 16px;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+.mark { border-radius: 7px; flex: none; }
+.bar-title { font-weight: 700; font-size: 1.15rem; }
+.bar-sub { color: var(--bar-quiet); font-size: 0.9rem; }
+
+main { max-width: 980px; margin: 0 auto; padding: 20px 16px 40px; }
+footer {
+  max-width: 980px;
+  margin: 0 auto;
+  padding: 0 16px 32px;
+  color: var(--quiet);
+  font-size: 0.85rem;
+}
+
+.banner {
+  border-radius: var(--radius);
+  padding: 12px 16px;
+  margin: 0 0 16px;
+  border: 1px solid var(--rule);
+}
+.banner ul { margin: 6px 0; padding-left: 1.2em; }
+.banner-error {
+  background: color-mix(in srgb, var(--critical) var(--wash), var(--sheet));
+  border-color: var(--critical);
+}
+.banner-warn {
+  background: color-mix(in srgb, var(--elevated) var(--wash), var(--sheet));
+  border-color: var(--elevated);
+}
+
+.summary { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 8px; }
+.summary a {
+  background: var(--sheet);
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  padding: 6px 12px;
+  color: var(--ink);
+  text-decoration: none;
+  font-size: 0.92rem;
+}
+.summary .count { font-weight: 700; }
+
+.section { margin-top: 28px; }
+h2 { font-size: 1.3rem; margin: 0 0 2px; }
+.quiet { color: var(--quiet); font-weight: 400; font-size: 0.9rem; }
+.blurb { color: var(--quiet); margin: 0 0 12px; }
+.empty { color: var(--quiet); }
+
+.card {
+  background: var(--sheet);
+  border: 1px solid var(--rule);
+  border-left: 5px solid var(--rule);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 14px 16px;
+  margin: 0 0 12px;
+}
+.card-undecided { border-left-color: var(--accent); }
+.card-again { border-left-color: var(--elevated); }
+.card-approve { border-left-color: var(--accent); opacity: 0.92; }
+.card-reject { border-left-color: var(--critical); opacity: 0.92; }
+.card-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; }
+.card h3 { margin: 0; font-size: 1.08rem; overflow-wrap: anywhere; }
+.date { color: var(--quiet); font-size: 0.88rem; }
+.cves { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+.cves a {
+  background: var(--chip);
+  border-radius: 6px;
+  padding: 1px 8px;
+  font-size: 0.88rem;
+  text-decoration: none;
+}
+dl { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; margin: 0; }
+dt { color: var(--quiet); font-size: 0.9rem; }
+dd { margin: 0; overflow-wrap: anywhere; }
+@media (max-width: 560px) {
+  dl { grid-template-columns: 1fr; }
+  dd { margin-bottom: 6px; }
+}
+
+.pill {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 1px 10px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  border: 1px solid currentcolor;
+}
+.pill-open { color: var(--accent); background: var(--accent-soft); }
+.pill-approve { color: var(--accent); background: var(--accent-soft); }
+.pill-reject { color: var(--critical); }
+.pill-again { color: var(--elevated); }
+
+.decided {
+  margin: 10px 0 0;
+  padding: 8px 12px;
+  background: var(--code);
+  border-radius: 10px;
+  overflow-wrap: anywhere;
+}
+details { margin-top: 8px; }
+summary { cursor: pointer; color: var(--accent); }
+.decide { margin-top: 10px; display: grid; gap: 6px; }
+.decide label { font-size: 0.9rem; color: var(--quiet); }
+textarea {
+  width: 100%;
+  font: inherit;
+  color: var(--ink);
+  background: var(--ground);
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  padding: 8px 10px;
+  resize: vertical;
+}
+.buttons { display: flex; gap: 8px; flex-wrap: wrap; }
+.btn {
+  font: inherit;
+  font-weight: 700;
+  border-radius: 10px;
+  padding: 7px 16px;
+  cursor: pointer;
+  border: 1px solid var(--accent);
+}
+.btn-approve { background: var(--accent); color: var(--on-accent); }
+.btn-reject { background: transparent; color: var(--critical); border-color: var(--critical); }
+
+ul.plain { list-style: none; padding: 0; margin: 6px 0 12px; }
+ul.plain li { padding: 2px 0; overflow-wrap: anywhere; }
+
+.table-wrap { overflow-x: auto; }
+table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--sheet);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+}
+th, td {
+  text-align: left;
+  vertical-align: top;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--rule);
+}
+th { font-size: 0.85rem; color: var(--quiet); }
+td { overflow-wrap: anywhere; }
+.nowrap { white-space: nowrap; }
+
+/* A.4b: what each card says. Exploited is ink, not red: red and amber stay for
+   rejected and look again. */
+.pill-exploited { color: var(--sheet); background: var(--ink); border-color: var(--ink); }
+.pill-hand { color: var(--ink); }
+.pill-nosign { color: var(--quiet); }
+.pill-covered { color: var(--quiet); }
+.card-covered { border-left-color: var(--rule); }
+.what { display: grid; gap: 2px; }
+.what .id { color: var(--quiet); font-size: 0.85rem; margin-right: 6px; }
+.words { margin-top: 8px; border-top: 1px solid var(--rule); padding-top: 8px; }
+.words summary { font-size: 0.92rem; }
+.words blockquote {
+  margin: 8px 0 0;
+  padding: 8px 12px;
+  background: var(--code);
+  border-radius: 10px;
+  font-size: 0.92rem;
+  overflow-wrap: anywhere;
+}
+.words cite { display: block; font-style: normal; color: var(--quiet); font-size: 0.82rem; }

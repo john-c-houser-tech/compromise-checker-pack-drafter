@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pack drafter</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="bar">
+  <div class="bar-in">
+    <img class="mark" src="/favicon.svg" alt="" width="28" height="28">
+    <div>
+      <div class="bar-title">Pack drafter</div>
+      <div class="bar-sub">Threats signalled in the last {{ days }} days, since {{ since }}{% if older %}, and {{ older }} older still to decide{% endif %}</div>
+    </div>
+  </div>
+</header>
+<main>
+{% if error %}
+  <p class="banner banner-error" role="alert">{{ error }}</p>
+{% endif %}
+{% if notes %}
+  <section class="banner banner-warn">
+    <strong>Feeds needing a look</strong> (the list may be missing threats):
+    <ul>{% for note in notes %}<li>{{ note }}</li>{% endfor %}</ul>
+    <code>drafter feeds status</code> says more.
+  </section>
+{% endif %}
+{% if packs_note %}
+  <p class="banner banner-warn"><strong>Signed packs couldn't be read</strong>, so no threat is marked Covered: {{ packs_note }}</p>
+{% endif %}
+
+<nav class="summary" aria-label="Sections">
+{% for s in sections %}
+  <a href="#{{ s.kind }}"><span class="count">{{ s.cards|length }}</span> {{ s.title }}{% if s.open %} <span class="pill pill-open">{{ s.open }} to decide</span>{% endif %}</a>
+{% endfor %}
+  <a href="#history"><span class="count">{{ history|length }}</span> Decisions</a>
+</nav>
+
+{% for s in sections %}
+<section class="section" id="{{ s.kind }}">
+  <h2>{{ s.title }} <span class="quiet">{{ s.cards|length }} threat(s), {{ s.cves }} CVE(s)</span></h2>
+  <p class="blurb">{{ s.blurb }}</p>
+  {% if not s.cards %}<p class="empty">None.</p>{% endif %}
+  {% for c in s.cards %}
+  {% set st = c.state %}
+  <article class="card{% if c.covered %} card-covered{% elif c.decidable %} card-{{ st.word }}{% endif %}" id="{{ c.anchor }}">
+    <div class="card-head">
+      <h3>{{ c.name }}</h3>
+      <span class="date">first signalled {{ c.first }}</span>
+      {% if c.older %}<span class="pill pill-again">Before the {{ days }} days</span>{% endif %}
+      {% if c.decidable %}
+        {% if c.covered %}<span class="pill pill-covered">Covered</span>
+        {% elif st.word == "approve" %}<span class="pill pill-approve">Approved</span>
+        {% elif st.word == "reject" %}<span class="pill pill-reject">Rejected</span>
+        {% elif st.word == "again" %}<span class="pill pill-again">Look again</span>
+        {% else %}<span class="pill pill-open">Undecided</span>{% endif %}
+      {% endif %}
+    </div>
+    <p class="cves">{% for cve in c.cves %}<a href="https://nvd.nist.gov/vuln/detail/{{ cve }}" rel="noreferrer noopener" target="_blank">{{ cve }}</a>{% endfor %}</p>
+    <dl>
+      {% if c.decidable %}
+      {% for cover in c.covers %}
+      <dt>Pack</dt><dd>Signed pack <strong>{{ cover.pack.id }}</strong> (version {{ cover.pack.version }}) names {% if cover.full %}{{ "the CVE" if c.cves|length == 1 else ("both CVEs" if c.cves|length == 2 else "all " ~ c.cves|length ~ " CVEs") }}{% else %}{{ cover.names|join(", ") }}, not {{ cover.missing|join(", ") }}{% endif %}</dd>
+      {% endfor %}
+      <dt>Attacks</dt><dd>{% if c.attacks.word == "exploited" %}<span class="pill pill-exploited">Exploited</span>{% elif c.attacks.word == "hand" %}<span class="pill pill-hand">Added by hand</span>{% else %}<span class="pill pill-nosign">No sign of attacks</span>{% endif %} {{ c.attacks.text }}</dd>
+      <dt>What</dt><dd class="what">{% for cve, text in c.what %}<div>{% if c.what|length > 1 %}<span class="id">{{ cve }}</span>{% endif %}{{ text }}</div>{% endfor %}</dd>
+      <dt>Reach</dt><dd class="what">{% for cves, text in c.reach %}<div>{% if cves %}<span class="id">{{ cves }}</span>{% endif %}{{ text }}</div>{% endfor %}</dd>
+      <dt>Ratings</dt><dd>{{ c.ratings }}</dd>
+      {% else %}
+      <dt>Signals</dt><dd>{{ c.signals|join("; ") }}</dd>
+      {% endif %}
+      {% if c.kind == "judge" and c.packages %}<dt>Packages</dt><dd>{{ c.packages }}</dd>{% endif %}
+      {% if c.kind == "thirdparty" %}
+        <dt>Matched</dt><dd>{{ c.matched|join("; ") or "NVD names the product" }}</dd>
+        <dt>Named</dt><dd>{{ c.named|join(", ") or "no product yet" }}</dd>
+      {% endif %}
+      {% if c.repos %}<dt>{{ "Rebuilt by" if c.kind == "thirdparty" else "Also rebuilt by" }}</dt><dd>{{ c.repos|join("; ") }}</dd>{% endif %}
+      {% if c.kind == "setaside" %}<dt>Why</dt><dd>{{ c.reasons|join("; ") }}</dd>{% endif %}
+      {% if c.decidable and c.fix %}<dt>Fix</dt><dd>{{ c.fix }}</dd>{% endif %}
+    </dl>
+    {% if c.decidable and c.words %}
+    <details class="words"><summary>What NVD and Red Hat say ({{ c.words|length }})</summary>
+      {% for w in c.words %}
+      <blockquote><cite>{{ w.cite }}</cite>{{ w.text }} <a href="{{ w.link }}" rel="noreferrer noopener" target="_blank">The whole record</a></blockquote>
+      {% endfor %}
+    </details>
+    {% endif %}
+    {% if c.decidable %}
+      {% if st.decision %}
+      {% set d = st.decision %}
+      <p class="decided">
+        {{ "Approved" if d.verdict == "approve" else "Rejected" }} {{ d.decided_at[:16]|replace("T", " ") }} UTC by {{ d.decided_by }}{% if d.reason %}:
+        <q>{{ d.reason }}</q>{% else %}, with no reason given{% endif %}
+        {% if st.new %}<br><strong>Came after it:</strong> {{ st.new|join(", ") }}{% endif %}
+        {% if st.apart %}<br><strong>Decided apart:</strong> {{ st.apart|join(", ") }}{% endif %}
+        {% if st.moved %}<br><strong>Now in another threat:</strong> {{ st.moved|join(", ") }}{% endif %}
+        {% if st.section %}<br><strong>Made under:</strong> {{ "Can judge" if st.section == "judge" else "Third-party builds" }}{% endif %}
+        {% if st.families is not none %}<br><strong>Shown then as:</strong> {{ st.families|join(", ") or "?" }}{% endif %}
+        {% if st.attacked %}<br><strong>Attacks reported since:</strong> {{ st.attacked|join("; ") }}{% endif %}
+      </p>
+      {% endif %}
+      {% set mine = kept.anchor == c.anchor %}
+      {% set keep = kept.reason if mine else "" %}
+      {% set folded = c.covered or not st.open %}
+      {% if not folded %}
+      <form class="decide" method="post" action="/decide">
+      {% else %}
+      <details{% if mine %} open{% endif %}><summary>{{ "Decide anyway" if c.covered else "Decide again" }}</summary>
+      <form class="decide" method="post" action="/decide">
+      {% endif %}
+        <input type="hidden" name="token" value="{{ token }}">
+        <input type="hidden" name="kind" value="{{ c.kind }}">
+        <input type="hidden" name="cves" value="{{ c.cves|join(',') }}">
+        <input type="hidden" name="families" value="{{ c.families }}">
+        <input type="hidden" name="signs" value="{{ c.signs }}">
+        <label for="r-{{ c.anchor }}">Reason (needed to reject; optional to approve)</label>
+        <textarea id="r-{{ c.anchor }}" name="reason" rows="2" maxlength="1000">{{ keep }}</textarea>
+        <div class="buttons">
+          <button type="submit" name="verdict" value="approve" class="btn btn-approve">Approve</button>
+          <button type="submit" name="verdict" value="reject" class="btn btn-reject">Reject</button>
+        </div>
+      </form>
+      {% if folded %}</details>{% endif %}
+    {% endif %}
+  </article>
+  {% endfor %}
+</section>
+{% endfor %}
+
+<section class="section" id="others">
+  <h2>Not threats here yet</h2>
+  {% if unnamed %}
+  <p>No vendor package, and NVD names no product yet ({{ unnamed|length }}); not ruled out until NVD names one:</p>
+  <ul class="plain">
+    {% for c in unnamed %}<li><span class="date">{{ c.first[:10] }}</span> <a href="https://nvd.nist.gov/vuln/detail/{{ c.cve }}" rel="noreferrer noopener" target="_blank">{{ c.cve }}</a>{% if c.kev_name %} · CISA: {{ c.kev_name }}{% endif %}</li>{% endfor %}
+  </ul>
+  {% endif %}
+  <p>Not on a supported release: {{ elsewhere }} CVE(s), counted only (<code>drafter candidates list --all</code> lists them).</p>
+  {% if unread %}<p>Vendor records not read yet: {{ unread|length }} CVE(s): {{ unread|join(", ") }}.</p>{% endif %}
+</section>
+
+<section class="section" id="history">
+  <h2>Decisions <span class="quiet">newest first; kept, never changed</span></h2>
+  {% if not history %}<p class="empty">None yet.</p>{% else %}
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>When (UTC)</th><th>Verdict</th><th>Threat</th><th>Reason</th><th>By</th></tr></thead>
+    <tbody>
+    {% for d in history %}
+      <tr>
+        <td class="nowrap">{{ d.decided_at[:16]|replace("T", " ") }}</td>
+        <td><span class="pill pill-{{ d.verdict }}">{{ "Approved" if d.verdict == "approve" else "Rejected" }}</span></td>
+        <td>{{ d.families|join(", ") or "?" }}<br><span class="quiet">{{ d.cves|join(", ") }}</span></td>
+        <td>{{ d.reason or "–" }}</td>
+        <td>{{ d.decided_by }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% endif %}
+</section>
+</main>
+<footer>pack drafter {{ version }} · AGPL-3.0 · a NouriLoop LLC project</footer>
+</body>
+</html>

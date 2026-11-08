@@ -106,7 +106,8 @@ changed, about 220 pages, 6.5 seconds apart).
 
 The timer runs its own install, not a working checkout, so work on a branch never
 changes what runs every hour. After each merge into `dev`, install again with the
-`uv pip install` line above. A newer drafter upgrades the store's schema when a
+`uv pip install` line above, and restart the candidate page if it runs
+([`web.md`](web.md)). A newer drafter upgrades the store's schema when a
 writing command (fetch, seed, refresh, add) opens it; reading commands (`feeds
 status`, `candidates list`) open it read-only and never do. The hourly install then
 refuses an upgraded store until it is installed again (`journalctl --user -u pack-drafter-feeds` says so). So try a branch on a

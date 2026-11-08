@@ -17,7 +17,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 5
 
 _SCHEMA = """
 CREATE TABLE fetches (
@@ -143,6 +143,64 @@ CREATE TABLE propose_run (
     gaps TEXT NOT NULL        -- JSON [keys]
 );
 """,
+    4: """
+-- A.4: a person's approve or reject of a threat, with the reason. Append-only: a
+-- later decision on the same CVEs stands in front of an earlier one, which stays.
+CREATE TABLE decision (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    decided_at TEXT NOT NULL,
+    cves TEXT NOT NULL,       -- JSON list, sorted: the threat as the page showed it
+    kind TEXT NOT NULL,       -- its section: judge or thirdparty
+    families TEXT NOT NULL,   -- JSON list, the package families it was shown with
+    verdict TEXT NOT NULL CHECK (verdict IN ('approve', 'reject')),
+    reason TEXT NOT NULL CHECK (length(reason) BETWEEN 1 AND 1000),
+    decided_by TEXT NOT NULL
+);
+CREATE TRIGGER decision_kept BEFORE UPDATE ON decision
+BEGIN SELECT RAISE(ABORT, 'decisions are append-only'); END;
+CREATE TRIGGER decision_not_removed BEFORE DELETE ON decision
+BEGIN SELECT RAISE(ABORT, 'decisions are append-only'); END;
+""",
+    5: """
+-- A.4b: what a card shows. The CVSS score shown for each CVE (JSON: version,
+-- vector, score, source), and Red Hat's bug title and statement. Filled from the
+-- pages already kept when the store moves up.
+ALTER TABLE nvd ADD COLUMN cvss TEXT;
+ALTER TABLE vendor_cve ADD COLUMN title TEXT;
+ALTER TABLE vendor_cve ADD COLUMN statement TEXT;
+-- Filling them takes about a minute and runs after the move, so it is marked as
+-- owed here and cleared when done: one cut short is done again by the next open.
+CREATE TABLE refill (schema INTEGER PRIMARY KEY);
+INSERT INTO refill (schema) VALUES (5);
+
+-- A.4b: an approve may go without a reason (a reject still needs one), and each
+-- decision keeps the signs of attacks it was made with ("kev:CVE-…", JSON), so a
+-- sign that comes later brings a reject back; NULL for decisions made before.
+-- SQLite can't change a CHECK, so the table is rebuilt with its rows and ids.
+DROP TRIGGER decision_kept;
+DROP TRIGGER decision_not_removed;
+CREATE TABLE decision_5 (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    decided_at TEXT NOT NULL,
+    cves TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    families TEXT NOT NULL,
+    verdict TEXT NOT NULL CHECK (verdict IN ('approve', 'reject')),
+    reason TEXT NOT NULL CHECK (
+        length(reason) <= 1000 AND (verdict = 'approve' OR length(reason) >= 1)
+    ),
+    decided_by TEXT NOT NULL,
+    signs TEXT
+);
+INSERT INTO decision_5 (id, decided_at, cves, kind, families, verdict, reason, decided_by)
+    SELECT id, decided_at, cves, kind, families, verdict, reason, decided_by FROM decision;
+DROP TABLE decision;
+ALTER TABLE decision_5 RENAME TO decision;
+CREATE TRIGGER decision_kept BEFORE UPDATE ON decision
+BEGIN SELECT RAISE(ABORT, 'decisions are append-only'); END;
+CREATE TRIGGER decision_not_removed BEFORE DELETE ON decision
+BEGIN SELECT RAISE(ABORT, 'decisions are append-only'); END;
+""",
 }
 
 
@@ -230,6 +288,9 @@ class Store:
                 self.db.execute("ROLLBACK")
             raise
         self.migrated_from = version
+        if version == 0:  # a new store: nothing kept yet to fill from
+            with self.transaction():
+                self.db.execute("DELETE FROM refill")
         self._ensure_columns()  # a store from early in schema 2 lacks two columns
 
     def _ensure_columns(self) -> None:
@@ -247,7 +308,8 @@ class Store:
             with self.transaction():
                 for sql in missing:
                     self.db.execute(sql)
-            self.migrated_from = 1  # so the caller fills them, as after an upgrade
+                self.db.execute("INSERT OR IGNORE INTO refill (schema) VALUES (2)")
+            self.migrated_from = 1
         runs = {row[1] for row in self.db.execute("PRAGMA table_info(propose_run)")}
         if runs and "token" not in runs:
             # Early schema 3: its runs have no token, so none of them vouches for a file.
@@ -261,6 +323,25 @@ class Store:
             with self.transaction():
                 self.db.execute("DROP TABLE vendor_cve")
                 self.db.execute(f"CREATE TABLE vendor_cve{create});")
+        # A store moved to schema 5 before the fill was marked owed (early A.4b code)
+        # has no refill table: make it, and owe the fill, since its values may be old.
+        if not self.db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'refill'"
+        ).fetchone():
+            with self.transaction():
+                self.db.execute("CREATE TABLE refill (schema INTEGER PRIMARY KEY)")
+                self.db.execute("INSERT INTO refill (schema) VALUES (5)")
+        # Schema 5's columns, on a table rebuilt from the early shape above.
+        for table, column in (
+            ("nvd", "cvss"),
+            ("vendor_cve", "title"),
+            ("vendor_cve", "statement"),
+        ):
+            have = {row[1] for row in self.db.execute(f"PRAGMA table_info({table})")}
+            if have and column not in have:
+                with self.transaction():
+                    self.db.execute(f"ALTER TABLE {table} ADD COLUMN {column} TEXT")
+                    self.db.execute("INSERT OR IGNORE INTO refill (schema) VALUES (5)")
 
     @contextlib.contextmanager
     def transaction(self) -> Iterator[sqlite3.Connection]:

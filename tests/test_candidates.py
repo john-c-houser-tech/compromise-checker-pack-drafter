@@ -10,7 +10,7 @@ import pytest
 from drafter import candidates as c
 from drafter import cli
 from drafter.http import FetchError
-from drafter.store import Store
+from drafter.store import SCHEMA_VERSION, Store
 from tests.conftest import ok
 
 PHP = "CVE-2026-109618"
@@ -472,7 +472,7 @@ def test_store_moves_from_schema_1(tmp_path):
     db.commit()
     db.close()
     s = Store(path)
-    assert s.db.execute("PRAGMA user_version").fetchone()[0] == 3
+    assert s.db.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
     assert s.state("kev").position == "x"
     s.db.execute("SELECT * FROM vendor_cve").fetchall()
     s.close()
@@ -1080,7 +1080,7 @@ def test_upgrade_from_schema_1_fills_nvd_names(tmp_path, capsys):
     db.commit()
     db.close()
     assert cli.main(["--home", str(home), "candidates", "add", PHP, "--note", "x"]) == 0
-    assert "NVD product names filled for 1 CVE(s)" in capsys.readouterr().out
+    assert "NVD rows for 1 CVE(s)" in capsys.readouterr().out
     s = Store(home / "drafter.sqlite3")
     row = s.db.execute("SELECT products, description FROM nvd").fetchone()
     assert json.loads(row[0]) == ["php:php"] and "PHP" in row[1]
@@ -1153,7 +1153,7 @@ def test_read_only_open_survives_uri_characters_in_the_path(tmp_path):
     assert not (tmp_path / "copy").exists()
 
 
-def test_an_early_schema_2_store_still_gets_its_columns_on_the_way_to_3(tmp_path):
+def test_an_early_schema_2_store_still_gets_its_columns_on_the_way_up(tmp_path):
     from drafter import store as store_module
 
     path = tmp_path / "early2.sqlite3"
@@ -1165,7 +1165,7 @@ def test_an_early_schema_2_store_still_gets_its_columns_on_the_way_to_3(tmp_path
     s = Store(path)
     cols = {r[1] for r in s.db.execute("PRAGMA table_info(nvd)")}
     assert {"products", "description"} <= cols
-    assert s.db.execute("PRAGMA user_version").fetchone()[0] == 3
+    assert s.db.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
     s.db.execute("SELECT * FROM propose_run").fetchall()
     s.close()
 

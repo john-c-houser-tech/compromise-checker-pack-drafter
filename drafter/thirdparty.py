@@ -435,7 +435,7 @@ def _debian_changelog(ctx: Context, upload_link: str) -> str | None:
     if not isinstance(urls, list):
         return None
     tarballs = [
-        u for u in urls if isinstance(u, str) and re.search(r"\.debian\.tar\.(xz|gz|bz2)$", u)
+        u for u in urls if isinstance(u, str) and re.search(r"\.debian\.tar\.(xz|gz|bz2)\Z", u)
     ]
     if not tarballs:
         return None
@@ -733,7 +733,7 @@ def _check(item: dict) -> tuple[str, str, list[str], str, str, str]:
     if not ok:
         raise ThirdPartyError(f"{key}: versions or binary_names reach beyond the branch {branch}")
     if not isinstance(fixed, str) or (
-        fixed and not (_VERSION.fullmatch(fixed) and re.search(r"[^-]-[^-]+$", fixed))
+        fixed and not (_VERSION.fullmatch(fixed) and re.search(r"[^-]-[^-]+\Z", fixed))
     ):
         raise ThirdPartyError(f"{key}: fixed is a version with its revision, or empty for none")
     if fixed and branch_of(fixed) != number:
