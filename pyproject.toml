@@ -10,8 +10,9 @@ readme = "README.md"
 license = "AGPL-3.0-only"
 license-files = ["LICENSE"]
 requires-python = ">=3.12"
-# Feeds are read with the standard library; PyYAML reads signed packs (A.3).
-dependencies = ["PyYAML>=6.0.3"]
+# Feeds are read with the standard library; PyYAML reads signed packs (A.3);
+# Jinja2 writes the candidate page (A.4).
+dependencies = ["PyYAML>=6.0.3", "Jinja2>=3.1.6"]
 
 [project.optional-dependencies]
 dev = ["pytest>=9", "ruff>=0.14"]
@@ -27,7 +28,8 @@ include = ["drafter*"]
 
 [tool.setuptools.package-data]
 # The set-aside list (plan D3) and the third-party watch list, read at run time.
-drafter = ["setaside.toml", "thirdparty.toml"]
+# The candidate page's template, stylesheet, mark and fonts (OFL, licence beside them).
+drafter = ["setaside.toml", "thirdparty.toml", "templates/*.j2", "static/*", "static/fonts/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

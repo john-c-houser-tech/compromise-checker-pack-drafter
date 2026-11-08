@@ -10,7 +10,7 @@ UTC = dt.UTC
 # Feeds give anything from whole seconds to nanoseconds, with Z, +00:00 or
 # nothing at all (NVD, Ubuntu). Fractions past microseconds are cut.
 _TIME = re.compile(
-    r"^(\d{4}-\d{2}-\d{2})(?:[T ](\d{2}:\d{2}(?::\d{2})?)(?:\.(\d+))?)?(Z|[+-]\d{2}:?\d{2})?$"
+    r"\A(\d{4}-\d{2}-\d{2})(?:[T ](\d{2}:\d{2}(?::\d{2})?)(?:\.(\d+))?)?(Z|[+-]\d{2}:?\d{2})?\Z"
 )
 
 

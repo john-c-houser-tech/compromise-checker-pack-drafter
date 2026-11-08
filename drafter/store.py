@@ -17,7 +17,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 _SCHEMA = """
 CREATE TABLE fetches (
@@ -142,6 +142,24 @@ CREATE TABLE propose_run (
     proposals TEXT NOT NULL,  -- JSON {key: {"names": [...], "fixed": "…" or null}}
     gaps TEXT NOT NULL        -- JSON [keys]
 );
+""",
+    4: """
+-- A.4: a person's approve or reject of a threat, with the reason. Append-only: a
+-- later decision on the same CVEs stands in front of an earlier one, which stays.
+CREATE TABLE decision (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    decided_at TEXT NOT NULL,
+    cves TEXT NOT NULL,       -- JSON list, sorted: the threat as the page showed it
+    kind TEXT NOT NULL,       -- its section: judge or thirdparty
+    families TEXT NOT NULL,   -- JSON list, the package families it was shown with
+    verdict TEXT NOT NULL CHECK (verdict IN ('approve', 'reject')),
+    reason TEXT NOT NULL CHECK (length(reason) BETWEEN 1 AND 1000),
+    decided_by TEXT NOT NULL
+);
+CREATE TRIGGER decision_kept BEFORE UPDATE ON decision
+BEGIN SELECT RAISE(ABORT, 'decisions are append-only'); END;
+CREATE TRIGGER decision_not_removed BEFORE DELETE ON decision
+BEGIN SELECT RAISE(ABORT, 'decisions are append-only'); END;
 """,
 }
 

@@ -148,7 +148,7 @@ def parse(body: bytes) -> tuple[int, int, list[dict]]:
     return data["totalResults"], len(entries), rows
 
 
-_CPE_PART = re.compile(r"^[a-z0-9][a-z0-9._\\/:~!-]{0,80}$")  # ":" only escaped, as "\\:"
+_CPE_PART = re.compile(r"\A[a-z0-9][a-z0-9._\\/:~!-]{0,80}\Z")  # ":" only escaped, as "\\:"
 MAX_PRODUCTS = 200  # a cut could drop a watched name, so the cap is only a guard
 
 

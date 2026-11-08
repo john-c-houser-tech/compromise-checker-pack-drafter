@@ -1,0 +1,19 @@
+# The candidate page (A.4) on 127.0.0.1:8089, behind Caddy at
+# https://packs.localhost:8443. Install: see docs/web.md.
+[Unit]
+Description=Compromise Checker pack drafter: the candidate page
+
+[Service]
+# The same install the hourly timer runs, so the two never disagree on the store.
+ExecStart=%h/.local/share/pack-drafter/venv/bin/drafter web
+Restart=on-failure
+RestartSec=5
+# It writes the store and nothing else, and needs only IP and local sockets.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=%h/.local/share/pack-drafter
+PrivateTmp=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=default.target
