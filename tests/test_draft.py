@@ -649,7 +649,10 @@ def test_an_event_type_prefix_is_accepted_with_the_fields_of_its_types():
 
 
 def test_an_address_and_a_source_url_with_a_version_are_not_refused():
-    said = f"{GOOD['references'][0]} https://github.com/google/brotli/releases/tag/v1.2.1 ;"
+    said = (
+        f"{GOOD['references'][0]} https://github.com/google/brotli/releases/tag/v1.2.1 ;"
+        " traffic from 127.0.0.1"
+    )
     answer = _answer(
         remediation=["Block 127.0.0.1 from nothing; NVD scores it 9.8."],
         references=["https://github.com/google/brotli/releases/tag/v1.2.1"],

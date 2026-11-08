@@ -17,7 +17,8 @@ person to confirm ([`docs/thirdparty.md`](docs/thirdparty.md)). In Stage 2, A.4 
 a page to approve or reject each threat, whose cards say whether it's attacked, what
 it is, who can reach it and whether a signed pack covers it
 ([`docs/web.md`](docs/web.md)), and A.5 drafts an approved threat's title,
-detections and remediation with an AI, within set caps ([`docs/draft.md`](docs/draft.md)).
+detections and remediation with an AI, within set caps, and A.6 holds what it
+writes to the sources ([`docs/draft.md`](docs/draft.md)).
 The plan is in
 [`plans/pack-application-plan-2026-10-31.md`](plans/pack-application-plan-2026-10-31.md).
 

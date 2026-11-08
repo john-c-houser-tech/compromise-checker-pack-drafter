@@ -65,6 +65,62 @@ An answer is refused when:
   versions of a package here. Both are looked for in the answer as sent and as
   read, so a YAML escape (`1\x2E2\x2E1`) hides nothing.
 
+## Text checks (A.6)
+
+The prose people read and act on (the title, remediation, mitigation text, detection
+titles and the unknowns; not the detections' match values, which are data the tool
+matches) is held to the sources too, since an advisory could steer the model into
+telling administrators to run something (`drafter/textcheck.py`):
+
+- **Commands, network addresses, file paths and URLs** are found in it (a command:
+  one an administrator would type, such as `systemctl restart …` or anything in
+  backticks; an address: an IPv4 or IPv6 address or range, an email address or a host
+  name; a path: one starting with `/` or `~/`). One that **no source contains** was
+  made up, and the answer is refused. One a source does contain is listed at the top
+  of the draft, under **CHECK BEFORE SIGNING**, with the sources it came from and the
+  source's words around it: being in a source doesn't make it safe. "Contains" means
+  whole: a command must be the source's whole (`rm -rf /var` isn't what a source said
+  when it said `rm -rf /var/lib/…`); an address may stand in a URL or before a port or
+  path (`github.com/org/x`, `127.0.0.1:11211`) but not inside a longer address
+  (`203.0.113.1` isn't `203.0.113.100`); a path may be the directory of a longer one;
+  a URL must be one of the source's addresses exactly, give or take quotes and a
+  sentence's punctuation. Measured on 40,000 of the store's own texts, 99% of what
+  the checks find in a text is found in it again; the rest are oddities (version
+  strings with four numbers joined by hyphens, glob paths), costing a retry if copied. Case, spacing and compatibility forms (full-width letters) don't
+  matter, nor does a `sudo` the model put in front of a source's `# command`, nor the
+  `&gt;` and the like the sources were sent with. At most 20 are refused at a time.
+- **A mitigation's setting** (a `php_ini` name the tool reads on the host) must be
+  one a source names, whole (`upload_progress.enabled` isn't
+  `session.upload_progress.enabled`).
+- **Dangerous instructions** are refused wherever they came from, a source included:
+  a download piped into a shell or another program, or run by one (`bash <(curl …)`,
+  `curl … && sh …`), a download from a bare IP address or over plain HTTP,
+  base64-decoded code, a `/dev/tcp` connection, netcat running a program, deleting
+  from the root (`rm -rf /`, `/*`, quoted or not), making a file executable (`+x`)
+  or writable by anyone (`777`), evaluating code, turning SELinux (`setenforce 0`, `SELINUX=disabled`)
+  or AppArmor off, stopping a firewall, audit or logging service, or dropping the
+  firewall's rules (`iptables --flush`, `-P INPUT ACCEPT`).
+- **References** (already held to the sources' addresses) on a site that isn't a
+  usual advisory publisher (NVD, CVE, CISA, the distributions, the projects' own
+  sites, GitHub and the like) are listed under CHECK BEFORE SIGNING too.
+
+These are heuristics: a phrase missed is caught by the person reviewing, who sees
+every literal the checks found; a phrase wrongly flagged costs one more request. An
+instruction given in words, or with a command not on the list, isn't caught; nor is
+a reference on a site anyone can publish on (GitHub, GitLab, Launchpad PPAs), which
+counts as a usual one. Negated advice ("never set SELINUX=disabled") is refused too:
+skipping it would let "don't hesitate to run …" through, and the model rewords on its
+second try. A shell given a command string (`sh -c '…'`) isn't refused, since the
+sources' own mitigations use it; it must still come from a source, and is listed.
+Each pattern is bounded, so a hostile answer can't make the checks slow. The
+six real drafts of 2026-11-08 pass them unchanged; the ruby/GitLab draft lists three
+references on hackerone.com. Tests plant a hostile instruction in each feed (NVD,
+CISA, Red Hat, Ubuntu): it reaches the model only inside its source block, a model
+that obeys a dangerous one is refused, and one that copies a quieter one has it
+listed for the signer.
+
+## When an answer is refused
+
 An answer that breaks the reading itself is refused, never a crash: it has been
 paid for, and its cost and text are kept. A refused answer goes back once with its
 problems listed; the model's own turn is sent back unchanged. A second refusal ends
