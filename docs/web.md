@@ -14,10 +14,13 @@ judge** and **Third-party builds** with a form each; **Kernels** (a notice only,
 plan D2) and **Set aside** (changed in `setaside.toml`, not here) without one.
 Below them, the CVEs that aren't threats here yet, and every decision made.
 
-A threat still to decide (undecided, or Look again) stays on the page after its
-last sign is older than `--days`, marked "No sign in 30 days", until someone
-decides it: the page reads back 180 days, as far as `candidates refresh` keeps
-vendor records current. Decided threats and notices leave when their window ends.
+The window goes by each CVE's first sign, as the list's does. A threat still to
+decide (undecided, or Look again) stays on the page after its first sign leaves
+the window, marked "Before the 30 days", until someone decides it: the page reads
+back 180 days, as far as `candidates refresh` keeps vendor records current. These
+older CVEs are grouped among themselves only, so the window's threats are grouped
+exactly as `drafter candidates list` groups them. Decided threats and notices
+leave with their window.
 
 Feeds that need a look are named at the top, since the list may then be missing
 threats. `drafter candidates list` shows each threat's decision too (over its own

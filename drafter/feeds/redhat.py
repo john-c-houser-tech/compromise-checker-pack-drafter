@@ -21,7 +21,7 @@ PAGE = 1000
 MAX_PAGES = 20
 LOOKBACK = dt.timedelta(days=30)
 MAX_BYTES = 32 * 1024 * 1024
-_PACKAGE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+:~-]{0,200}$")
+_PACKAGE = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._+:~-]{0,200}\Z")
 
 
 class RedHatCritical(Feed):

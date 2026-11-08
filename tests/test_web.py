@@ -466,10 +466,72 @@ def test_web_refuses_odd_flags_and_a_busy_store(tmp_path, monkeypatch, capsys):
 def test_a_threat_still_to_decide_stays_after_its_window(page):
     page.site.days = 10  # PHP's last sign is 17 days old, the kernel's 23
     _, html = page.request("GET")
-    assert 'id="t-cve-2026-109618"' in html and "No sign in 10 days" in html
+    assert 'id="t-cve-2026-109618"' in html and "Before the 10 days" in html
     assert "and 1 older still to decide" in html
     assert 'id="t-cve-2026-98432"' not in html  # a notice only: it goes
     assert page.post(page.form())[0].status == 303
     _, html = page.request("GET")
     assert 'id="t-cve-2026-109618"' not in html  # decided: it goes too
     assert "still to decide" not in html
+
+
+def _nginx(store, cve, when):
+    _nvd(store, cve, when)
+    _vendor(store, cve, "ubuntu", [_pkg("ubuntu:24.04", "nginx")])
+    _vendor(store, cve, "redhat", [_pkg("rhel:9", "nginx")])
+
+
+def test_the_window_is_grouped_as_the_list_groups_it(page, capsys):
+    # A before the window, B and C in it: the page must not let A pull B away from C.
+    s = Store(page.site.store_path)
+    for cve, when in (
+        ("CVE-2026-2001", "2026-10-03T00:00:00.000000Z"),
+        ("CVE-2026-2002", "2026-10-13T00:00:00.000000Z"),
+        ("CVE-2026-2003", "2026-10-26T00:00:00.000000Z"),
+    ):
+        _nginx(s, cve, when)
+    s.close()
+    page.site.days = 30
+    _, html = page.request("GET")
+    assert 'value="CVE-2026-2002,CVE-2026-2003"' in html
+    assert 'value="CVE-2026-2001"' in html and "Before the 30 days" in html
+    body = page.form(cves="CVE-2026-2002,CVE-2026-2003", families="nginx", reason="both")
+    assert page.post(body)[0].status == 303
+    home = str(page.site.home)
+    assert cli.main(["--home", home, "candidates", "list", "--days", "30"]) == 0
+    out = capsys.readouterr().out
+    assert "decision: approved 2026-11-07: both" in out
+
+
+def test_a_later_sign_does_not_bring_a_decided_older_threat_back(page):
+    s = Store(page.site.store_path)
+    _kev(s, "CVE-2026-3001", "2026-08-01")  # first sign, long before the window
+    _nginx(s, "CVE-2026-3001", "2026-11-05T00:00:00.000000Z")  # NVD re-stamped
+    s.close()
+    page.site.days = 30
+    _, html = page.request("GET")
+    assert 'id="t-cve-2026-3001"' in html and "Before the 30 days" in html
+    body = page.form(cves="CVE-2026-3001", families="nginx", reason="old news")
+    assert page.post(body)[0].status == 303
+    _, html = page.request("GET")
+    assert 'id="t-cve-2026-3001"' not in html and "still to decide" not in html
+
+
+@pytest.mark.parametrize("value", ["2026-02-30", "2026-11-02\n", "2026-1-02", "today"])
+def test_kev_dates_that_cant_be_read_are_left_out(value):
+    from drafter.feeds import kev
+
+    assert not kev._real_date(value)
+    assert kev._real_date("2026-11-02")
+
+
+def test_a_reason_with_no_box_left_is_shown_in_the_message(page):
+    # PHP's CVEs move to the kernel notice after the page loaded: no form holds them.
+    s = Store(page.site.store_path)
+    for cve in PHP:
+        _vendor(s, cve, "ubuntu", [_pkg("ubuntu:24.04", "linux-aws")])
+        _vendor(s, cve, "redhat", [], found=0)
+    s.close()
+    response, html = page.post(page.form(reason="keep this somewhere"))
+    assert response.status == 409
+    assert "here is your reason: keep this somewhere" in html

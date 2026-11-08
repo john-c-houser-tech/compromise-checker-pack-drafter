@@ -12,7 +12,18 @@ from drafter.store import FeedState
 
 URL = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
 MAX_BYTES = 32 * 1024 * 1024
-_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_DATE = re.compile(r"\A\d{4}-\d{2}-\d{2}\Z")
+
+
+def _real_date(text: str) -> bool:
+    """YYYY-MM-DD and a day that exists: the candidate list reads it as a time."""
+    if not _DATE.match(text):
+        return False
+    try:
+        dt.date.fromisoformat(text)
+    except ValueError:
+        return False
+    return True
 
 
 def _text(value: object, limit: int = 300) -> str | None:
@@ -73,7 +84,7 @@ def parse(body: bytes) -> list[dict]:
             continue
         cve = cve_or_none(entry.get("cveID"))
         added = entry.get("dateAdded")
-        if cve is None or not isinstance(added, str) or not _DATE.match(added):
+        if cve is None or not isinstance(added, str) or not _real_date(added):
             continue
         rows.append(
             {

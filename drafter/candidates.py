@@ -44,11 +44,11 @@ SIGNAL_NAMES = {
     "manual": "added by hand",
 }
 
-_UBUNTU_RELEASE = re.compile(r"^Ubuntu:(\d{2})\.(\d{2})(?::LTS)?$")
-_RH_CPE = re.compile(r"^cpe:/[aoh]:redhat:([a-z0-9_]+)(?::([0-9][0-9.]*))?(?::.*)?$")
-_RH_BASE = re.compile(r"^(enterprise_linux(_eus)?|rhel_(eus|aus|e4s|tus|els|extras))$")
+_UBUNTU_RELEASE = re.compile(r"\AUbuntu:(\d{2})\.(\d{2})(?::LTS)?\Z")
+_RH_CPE = re.compile(r"\Acpe:/[aoh]:redhat:([a-z0-9_]+)(?::([0-9][0-9.]*))?(?::.*)?\Z")
+_RH_BASE = re.compile(r"\A(enterprise_linux(_eus)?|rhel_(eus|aus|e4s|tus|els|extras))\Z")
 _RH_EL = re.compile(r"(?:::|\.)el(\d{1,2})")
-_PACKAGE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,120}$")
+_PACKAGE = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._+-]{0,120}\Z")
 # Red Hat's package_state values meaning "affected, no fixed build yet".
 VENDOR_SIGNALS = ("ubuntu", "redhat")  # signal kinds that are a vendor's own rating
 _RH_UNFIXED = {"affected", "fix deferred", "will not fix", "under investigation"}
@@ -241,8 +241,8 @@ def parse_ubuntu(body: bytes) -> tuple[str | None, list[dict]]:
     return published, _unique(packages)
 
 
-_EPOCH = re.compile(r"^(.+)-\d+$")
-_NVR = re.compile(r"^(.+)-[^-]+-[^-]*\.el\d+[^-]*$")
+_EPOCH = re.compile(r"\A(.+)-\d+\Z")
+_NVR = re.compile(r"\A(.+)-[^-]+-[^-]*\.el\d+[^-]*\Z")
 
 
 def _rh_name(package: str) -> str | None:

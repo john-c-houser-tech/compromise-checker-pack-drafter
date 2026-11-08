@@ -110,15 +110,11 @@ def anchor(threat: candidates.Threat) -> str:
     return "t-" + min(c.cve for c in threat.candidates).lower()
 
 
-def _last_sign(cands: list[candidates.Candidate]) -> dt.datetime:
-    return max(timeutil.parse(s.when) for c in cands for s in c.signals)
-
-
 def _card(
     threat: candidates.Threat,
     by_cve: dict[str, decisions.Decision],
     listed: set[str],
-    recent: dt.datetime,
+    older: bool,
 ) -> dict:
     cands = threat.candidates
     via, repos = [], []
@@ -144,30 +140,40 @@ def _card(
         "reasons": sorted({r for c in cands for r in c.reasons}),
         "decidable": threat.kind in decisions.DECIDABLE,
         "state": decisions.state(threat, by_cve, listed),
-        "older": _last_sign(cands) < recent,
+        "older": older,
     }
 
 
 def view(site: Site, store: Store) -> dict:
     now = site.now()
-    recent = now - dt.timedelta(days=site.days)
-    since = timeutil.fmt(recent)
-    # Read further back than shown: a threat still to decide stays on the page
-    # (marked older) until someone decides it, rather than dropping off unseen.
+    since = timeutil.fmt(now - dt.timedelta(days=site.days))
+    # The window's threats exactly as `drafter candidates list` groups them, so a
+    # decision reads the same in both.
+    found = candidates.classify(store, since, now=now)
+    recent = candidates.threats(found)
+    # Then threats still to decide that were first signalled before the window,
+    # grouped among themselves only, so they never change the window's groups. They
+    # stay (marked) until someone decides them, instead of dropping off unseen.
+    in_window = {c.cve for c in found}
     wide = timeutil.fmt(now - max(OPEN_FOR, dt.timedelta(days=site.days)))
-    found = candidates.classify(store, wide, now=now)
-    groups = candidates.threats(found)
+    before = [c for c in candidates.classify(store, wide, now=now) if c.cve not in in_window]
+    earlier = [g for g in candidates.threats(before) if g.kind in decisions.DECIDABLE]
     decided = decisions.history(store)
     by_cve = decisions.latest(decided)
-    listed = {c.cve for g in groups for c in g.candidates}
+    listed = {c.cve for g in recent + earlier for c in g.candidates}
+    shown: list[candidates.Threat] = []  # the threats with a form on the page
     sections = []
     for kind, title, blurb in SECTIONS:
-        cards = [_card(g, by_cve, listed, recent) for g in groups if g.kind == kind]
-        cards = [
-            card
-            for card in cards
-            if not card["older"] or (card["decidable"] and card["state"].open)
-        ]
+        cards = []
+        for group, older in [(g, False) for g in recent] + [(g, True) for g in earlier]:
+            if group.kind != kind:
+                continue
+            card = _card(group, by_cve, listed, older)
+            if older and not card["state"].open:
+                continue
+            cards.append(card)
+            if card["decidable"]:
+                shown.append(group)
         sections.append(
             {
                 "kind": kind,
@@ -183,18 +189,19 @@ def view(site: Site, store: Store) -> dict:
         "days": site.days,
         "notes": needing_a_look(store, now),
         "sections": sections,
-        "unnamed": [c for c in found if c.kind == "unnamed" and _last_sign([c]) >= recent],
-        "elsewhere": sum(1 for c in found if c.kind == "elsewhere" and _last_sign([c]) >= recent),
-        "unread": [c.cve for c in found if c.kind == "unread" and _last_sign([c]) >= recent],
+        "unnamed": [c for c in found if c.kind == "unnamed"],
+        "elsewhere": sum(1 for c in found if c.kind == "elsewhere"),
+        "unread": [c.cve for c in found if c.kind == "unread"],
         "older": sum(1 for s in sections for card in s["cards"] if card["older"]),
         "history": decided,
-        "groups": groups,
+        "groups": recent + earlier,
+        "shown": shown,
     }
 
 
 def page(site: Site, data: dict, *, error: str | None = None, kept: dict | None = None) -> str:
     return _env.get_template("page.html.j2").render(
-        **{k: v for k, v in data.items() if k != "groups"},
+        **{k: v for k, v in data.items() if k not in ("groups", "shown")},
         token=site.token,
         error=error,
         kept={"anchor": "", "reason": "", **(kept or {})},
@@ -369,7 +376,8 @@ class Handler(BaseHTTPRequestHandler):
             cves = [c for c in fields["cves"].split(",") if c]
             families = [f for f in fields["families"].split(",") if f]
             threat = find(data["groups"], fields["kind"], cves, families)
-            kept = {"anchor": nearest(data["groups"], cves), "reason": fields["reason"]}
+            # Back in the box of a threat that has one, whatever happened to the CVEs.
+            kept = {"anchor": nearest(data["shown"], cves), "reason": fields["reason"]}
             if threat is None:
                 self._html(
                     HTTPStatus.CONFLICT,
@@ -378,7 +386,13 @@ class Handler(BaseHTTPRequestHandler):
                         data,
                         error="That threat changed since the page loaded (a CVE joined or"
                         " left it, its packages changed, or it moved section). Look at it"
-                        " again below; your reason is kept in its box.",
+                        " again below; "
+                        + (
+                            "your reason is kept in its box."
+                            if kept["anchor"]
+                            else "it has no form now, so here is your reason: "
+                            + decisions.clean_reason(fields["reason"] or "(none)")[:1000]
+                        ),
                         kept=kept,
                     ),
                 )

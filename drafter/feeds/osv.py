@@ -28,7 +28,7 @@ from drafter.store import FeedState, dumps
 log = logging.getLogger(__name__)
 
 BASE = "https://osv-vulnerabilities.storage.googleapis.com"
-OSV_ID = re.compile(r"^[A-Za-z][A-Za-z0-9._:-]{2,100}$")
+OSV_ID = re.compile(r"\A[A-Za-z][A-Za-z0-9._:-]{2,100}\Z")
 MAX_INDEX_BYTES = 64 * 1024 * 1024
 MAX_RECORD_BYTES = 16 * 1024 * 1024
 MAX_SEED_BYTES = 3 * 1024 * 1024 * 1024

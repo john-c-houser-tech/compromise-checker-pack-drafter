@@ -8,7 +8,7 @@ Description=Compromise Checker pack drafter: the candidate page
 ExecStart=%h/.local/share/pack-drafter/venv/bin/drafter web
 Restart=on-failure
 RestartSec=5
-# It reads and writes the store and nothing else, and only listens on loopback.
+# It writes the store and nothing else, and needs only IP and local sockets.
 NoNewPrivileges=yes
 ProtectSystem=strict
 ReadWritePaths=%h/.local/share/pack-drafter

@@ -47,7 +47,7 @@
     <div class="card-head">
       <h3>{{ c.name }}</h3>
       <span class="date">first signalled {{ c.first }}</span>
-      {% if c.older %}<span class="pill pill-again">No sign in {{ days }} days</span>{% endif %}
+      {% if c.older %}<span class="pill pill-again">Before the {{ days }} days</span>{% endif %}
       {% if c.decidable %}
         {% if st.word == "approve" %}<span class="pill pill-approve">Approved</span>
         {% elif st.word == "reject" %}<span class="pill pill-reject">Rejected</span>

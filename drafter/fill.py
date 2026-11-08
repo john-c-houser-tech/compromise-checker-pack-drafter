@@ -38,9 +38,9 @@ ALMA_ERRATA_URL = "https://errata.almalinux.org/{major}/{id}.html"
 MAX_CSAF_BYTES = 64 * 1024 * 1024
 FAMILIES = ("ubuntu", "rhel")
 
-_RHSA = re.compile(r"^RH[SBE]A-(\d{4}):(\d{1,6})$")
-_USN = re.compile(r"^USN-\d{1,6}-\d{1,3}$")
-_ALSA = re.compile(r"^ALSA-\d{4}:[A-Z0-9]{1,8}$")
+_RHSA = re.compile(r"\ARH[SBE]A-(\d{4}):(\d{1,6})\Z")
+_USN = re.compile(r"\AUSN-\d{1,6}-\d{1,3}\Z")
+_ALSA = re.compile(r"\AALSA-\d{4}:[A-Z0-9]{1,8}\Z")
 _NEVRA = re.compile(
     r"^(?P<name>[A-Za-z0-9][A-Za-z0-9._+-]*)-(?:(?P<epoch>\d+):)?(?P<version>[^-:]+)-"
     r"(?P<release>[^-:]+)\.(?P<arch>x86_64|aarch64|ppc64le|s390x|noarch|i686|src)"
@@ -48,9 +48,9 @@ _NEVRA = re.compile(
 )
 _EL = re.compile(r"(?:^|\.|\+|_)el(\d{1,2})")
 # The checker's own shapes (checker/packs/format.py): what a pack may hold.
-_PACKAGE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9+._-]{0,99}$")
-_VERSION = re.compile(r"^[A-Za-z0-9.+~:^_-]{1,100}$")
-_URL = re.compile(r"^https://[A-Za-z0-9.-]+/[A-Za-z0-9._~:/?#@!$&'()*+,;=%-]*$")
+_PACKAGE = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9+._-]{0,99}\Z")
+_VERSION = re.compile(r"\A[A-Za-z0-9.+~:^_-]{1,100}\Z")
+_URL = re.compile(r"\Ahttps://[A-Za-z0-9.-]+/[A-Za-z0-9._~:/?#@!$&'()*+,;=%-]*\Z")
 
 
 class FillError(ValueError):
