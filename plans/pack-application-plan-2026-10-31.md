@@ -1,6 +1,6 @@
 # Pack application build plan — 2026-10-31
 
-> **Status: 2026-11-08.** Stage 1 (A.1–A.3) built; A.4 and A.4b (the decision page) built; A.5 (AI drafts) going ahead. D1–D4, D6 and D7 settled; D5 waits for A.8.
+> **Status: 2026-11-08.** Stage 1 (A.1–A.3) built; A.4 and A.4b (the decision page) built; A.5 (AI drafts) built and used (six drafts, $0.45); A.6 (text checks) going ahead. D1–D4, D6 and D7 settled; D5 waits for A.8.
 > Starts from the outline agreed on 2026-10-30, in Compromise Checker's
 > `plans/phase4-build-plan-2026-10-30.md`, "After Phase 4: the pack application".
 
@@ -137,13 +137,24 @@ the format allows. *Go-ahead: John, 2026-11-08; built as `drafter draft`
 
 **A.6 Text checks.** Refuse references that weren't among the fetched sources.
 Flag commands, addresses and URLs in prose that no source contains. Test with
-hostile advisories planted in each feed.
+hostile advisories planted in each feed. *Go-ahead: John, 2026-11-08 ([`docs/draft.md`](../docs/draft.md), "Text
+checks"): made-up ones refused, sourced ones listed for the signer, dangerous ones
+refused wherever they came from.*
 
 ### Stage 3: release
 
 **A.7 Hand-off.** Write `PACK.yaml` on a branch of a local packs clone, show what
 changed since the last version, freeze it, and print the signing command. Then
 check the signature and run `checker packs index`.
+
+*To settle before assembling (found 2026-11-08):* a threat whose fix is in another
+package. Red Hat lists the Java packages for CVE-2026-91403 as "will not fix", because
+RHEL is fixed by the ca-certificates update (CVE-2026-114406); `drafter fill` reads
+that as "no fix", so a pack assembled from fill and the Java draft would show every
+RHEL host with Java as vulnerable forever, updated or not. The ruby and edk2 threats
+have no fix yet either, but one may still come. A person decides at assembly which
+packages such a pack is judged from (here, perhaps ca-certificates), or whether it
+needs a pack of its own.
 
 **A.8 Proof.** A proof built from the pack's own entries (D5).
 

@@ -31,7 +31,7 @@ from typing import Any
 import yaml
 from pydantic import ValidationError
 
-from drafter import decisions, timeutil, vocabulary
+from drafter import decisions, textcheck, timeutil, vocabulary
 from drafter.checkerformat import CHECKER_COMMIT
 from drafter.checkerformat import format as packformat
 from drafter.feeds import CVE_ID
@@ -91,6 +91,23 @@ class Source:
     sha256: str | None
     url: str
     urls: frozenset[str] = frozenset()  # every address in its words, the only references
+    plain: str = ""  # its words as written (not as JSON), for looking things up in
+
+    @property
+    def said(self) -> str:
+        return self.plain or self.text
+
+
+def _plain(value: object) -> str:
+    """A source's strings as written, one a line: JSON would escape a quote or a
+    line break inside a command a source gives."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        return "\n".join(_plain(v) for v in value.values())
+    if isinstance(value, list):
+        return "\n".join(_plain(v) for v in value)
+    return "" if value is None else str(value)
 
 
 def _urls(value: object) -> frozenset[str]:
@@ -133,7 +150,9 @@ def sources(store: Store, cves: list[str]) -> list[Source]:
         ).fetchone()
         if row and (row[0] or row[1]):
             text = f"Description: {row[0] or '(none yet)'}\nCVSS: {row[1] or '(none yet)'}"
-            out.append(Source(f"NVD, {cve}", text, row[2], row[3], row[4], _urls(row[0])))
+            out.append(
+                Source(f"NVD, {cve}", text, row[2], row[3], row[4], _urls(row[0]), _plain(row[0]))
+            )
         row = db.execute(
             "SELECT k.fetch_id, f.sha256, f.url FROM kev k JOIN fetches f ON f.id = k.fetch_id"
             " WHERE k.cve = ?",
@@ -150,6 +169,7 @@ def sources(store: Store, cves: list[str]) -> list[Source]:
                         row[1],
                         row[2],
                         _urls(entry),
+                        _plain(entry),
                     )
                 )
         for vendor, fetch_id, sha, url in db.execute(
@@ -169,6 +189,7 @@ def sources(store: Store, cves: list[str]) -> list[Source]:
                         sha,
                         url,
                         _urls(words),
+                        _plain(words),
                     )
                 )
     return out
@@ -351,6 +372,7 @@ class Checked:
     mitigations: list = field(default_factory=list)
     detections: list = field(default_factory=list)
     problems: list[str] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)  # for the person signing (A.6)
 
 
 def check(text: str, found: list[Source], names: set[str], cves: list[str]) -> Checked:
@@ -427,7 +449,46 @@ def _check(text: str, found: list[Source], names: set[str], cves: list[str]) -> 
         # java-17-openjdk-headless).
         if name.lower() in lowered:
             out.problems.append(f"a package name in the answer: {name}")
+    _text_checks(out, answer, found, known)
     return out
+
+
+def _prose(answer: dict, mitigations: list, detections: list) -> str:
+    """What people read and act on: the title, remediation, mitigation text,
+    detection titles and the unknowns (the detections' match values are data the
+    tool matches, not words to anyone)."""
+    parts = [answer.get("title"), *(answer.get("remediation") or []),
+             *(answer.get("unknowns") or [])]  # fmt: skip
+    parts += [m.get("text") for m in mitigations if isinstance(m, dict)]
+    parts += [d.get("title") for d in detections if isinstance(d, dict)]
+    return "\n".join(_strings([p for p in parts if p is not None]))
+
+
+def _text_checks(out: Checked, answer: dict, found: list[Source], known: frozenset) -> None:
+    """A.6: what the prose tells people to run, reach or open, held to the sources."""
+    prose = _prose(answer, out.mitigations, out.detections)
+    for danger in textcheck.dangers(prose):
+        out.problems.append(f"never in a pack, wherever it came from: {danger}")
+    sources = [(s.name, s.said) for s in found]
+    for finding in textcheck.look_up(textcheck.literals(prose), sources):
+        lit = finding.literal
+        given_by = finding.sources
+        if lit.kind == "URL":
+            address = html.unescape(lit.text)
+            given_by = tuple(s.name for s in found if address in s.urls)
+        if not given_by:
+            out.problems.append(f"a {lit.kind} no source gives: {lit.text}")
+        else:
+            out.notes.append(f"{lit.kind} {lit.text!r}: from {'; '.join(given_by)}")
+    # References are all from the sources already (above): only those on a site that
+    # isn't a usual advisory publisher are worth a second look.
+    for url in answer["references"] if isinstance(answer["references"], list) else []:
+        if isinstance(url, str) and url in known and not textcheck.known_site(url):
+            given_by = "; ".join(s.name for s in found if url in s.urls)
+            out.notes.append(
+                f"reference on {textcheck.site(url)}, not a usual advisory site: {url}"
+                f" (from {given_by})"
+            )
 
 
 def _strings(value: object) -> list[str]:
@@ -765,6 +826,12 @@ def render(d: Draft, made: str) -> str:
         lines.append(
             _comment(f"#   {s.name}: fetch {s.fetch_id}, sha256 {s.sha256 or '?'}, {s.url}")
         )
+    if d.checked.notes:
+        lines.append(
+            "# CHECK BEFORE SIGNING: what the prose and references point people at. Each"
+            " is in a source, which doesn't make it safe: sources are fetched text."
+        )
+        lines += [f"#   {_comment(n)}" for n in d.checked.notes]
     if d.checked.problems:
         lines.append("# NOT USABLE: the last answer was refused:")
         lines += [f"#   {_comment(p)}" for p in d.checked.problems]
@@ -775,7 +842,8 @@ def render(d: Draft, made: str) -> str:
     if unknowns:
         lines.append("# What the sources leave unknown (the AI's list):")
         for item in unknowns:
-            lines += [f"#   - {line}" for line in _wrap(str(item))]
+            wrapped = _wrap(str(item)) or [""]
+            lines += [f"#   - {wrapped[0]}"] + [f"#     {line}" for line in wrapped[1:]]
     body = {
         "title": answer["title"],
         "mitigations": d.checked.mitigations,

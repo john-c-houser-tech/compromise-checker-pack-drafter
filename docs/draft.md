@@ -65,6 +65,40 @@ An answer is refused when:
   versions of a package here. Both are looked for in the answer as sent and as
   read, so a YAML escape (`1\x2E2\x2E1`) hides nothing.
 
+## Text checks (A.6)
+
+The prose people read and act on (the title, remediation, mitigation text, detection
+titles and the unknowns; not the detections' match values, which are data the tool
+matches) is held to the sources too, since an advisory could steer the model into
+telling administrators to run something (`drafter/textcheck.py`):
+
+- **Commands, network addresses, file paths and URLs** are found in it (a command:
+  one an administrator would type, such as `systemctl restart …` or anything in
+  backticks; an address: an IPv4 or IPv6 address or range, an email address or a host
+  name; a path: one starting with `/` or `~/`). One that **no source contains** was
+  made up, and the answer is refused. One a source does contain is listed at the top
+  of the draft, under **CHECK BEFORE SIGNING**, with the sources it came from: being
+  in a source doesn't make it safe.
+- **Dangerous instructions** are refused wherever they came from, a source included:
+  a download piped into a shell or another program, a download from a bare IP
+  address or over plain HTTP, base64-decoded code, a `/dev/tcp` connection, a shell
+  given a command string, netcat running a program, deleting from the root, making a
+  file executable, evaluating code, turning SELinux or AppArmor off, stopping a
+  firewall, audit or logging service, or dropping the firewall's rules.
+- **References** (already held to the sources' addresses) on a site that isn't a
+  usual advisory publisher (NVD, CVE, CISA, the distributions, the projects' own
+  sites, GitHub and the like) are listed under CHECK BEFORE SIGNING too.
+
+These are heuristics: a phrase missed is caught by the person reviewing, who sees
+every literal the checks found; a phrase wrongly flagged costs one more request. The
+six real drafts of 2026-11-08 pass them unchanged; the ruby/GitLab draft lists three
+references on hackerone.com. Tests plant a hostile instruction in each feed (NVD,
+CISA, Red Hat, Ubuntu): it reaches the model only inside its source block, a model
+that obeys a dangerous one is refused, and one that copies a quieter one has it
+listed for the signer.
+
+## When an answer is refused
+
 An answer that breaks the reading itself is refused, never a crash: it has been
 paid for, and its cost and text are kept. A refused answer goes back once with its
 problems listed; the model's own turn is sent back unchanged. A second refusal ends
