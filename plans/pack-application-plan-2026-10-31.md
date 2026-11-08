@@ -1,6 +1,6 @@
 # Pack application build plan — 2026-10-31
 
-> **Status: 2026-11-08.** Stage 1 (A.1–A.3) built; A.4 and A.4b (the decision page) built; A.5 (AI drafts) built and used (six drafts, $0.45); A.6 (text checks) built; A.7 (assembly) going ahead. D1–D4, D6 and D7 settled; D5 waits for A.8.
+> **Status: 2026-11-08.** Stage 1 (A.1–A.3) built; A.4 and A.4b (the decision page) built; A.5 (AI drafts) built and used (six drafts, $0.45); A.6 (text checks) built; A.7 (assembly) built, the first pack (brotli) assembled and signed, its pull request held for the vendor-page check and A.8; A.8 (proof) being built in the checker. D1–D7 settled.
 > Starts from the outline agreed on 2026-10-30, in Compromise Checker's
 > `plans/phase4-build-plan-2026-10-30.md`, "After Phase 4: the pack application".
 
@@ -158,7 +158,10 @@ have no fix yet either, but one may still come. A person decides at assembly whi
 packages such a pack is judged from (here, perhaps ca-certificates), or whether it
 needs a pack of its own.
 
-**A.8 Proof.** A proof built from the pack's own entries (D5).
+**A.8 Proof.** A proof built from the pack's own entries (D5): the checker's
+`tests/integration/pack_proof.py`, beside its other Linode proofs. Without `--go` it
+prints the plan (one server per release the pack names; RHEL on Rocky, or Alma with
+`--alma`) and creates nothing.
 
 **A.9 A real one.** Regenerate PHP2Shell without looking at the signed pack and
 compare the two: what was missed, what was wrong, how long it took. Then do the
@@ -206,10 +209,11 @@ first new threat for real, through review, proof and John's signature.
   version, like Sury. The metadata keeps only the last three changelog entries per
   package, so an older fix is proposed from version numbers alone, with no
   changelog line to show.
-- **D5. Proof for each generated pack?** PHP2Shell's proof was written by hand.
-  *Recommended: a general one (install the last vulnerable and the first fixed
-  build on one image per family, and check the verdicts), about a cent a run; each
-  run still with John's OK, under a Linode cap of $10 for this plan.*
+- **D5. Proof for each generated pack? DECIDED (John, 2026-11-08):** PHP2Shell's
+  proof was written by hand. A general one (install the last vulnerable and the first fixed
+  build on one image per family, and check the verdicts), about a cent a server; each
+  run with John's OK, under a Linode cap of $10 for this plan, stopping to tell John
+  at $5.
 - **D6. AI budget? DECIDED (John, 2026-11-08):** Claude Opus 5.5; at most $0.50 a
   draft and $10 for the plan, stopping to tell John at $5. Measured first on one
   brotli draft from the same input: Opus 5.5 $0.093, Sonnet 5.5 $0.044; Opus the more
