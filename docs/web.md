@@ -19,8 +19,9 @@ decide (undecided, or Look again) stays on the page after its first sign leaves
 the window, marked "Before the 30 days", until someone decides it: the page reads
 back 180 days, as far as `candidates refresh` keeps vendor records current. These
 older CVEs are grouped among themselves only, so the window's threats are grouped
-exactly as `drafter candidates list` groups them. Decided threats and notices
-leave with their window.
+exactly as `drafter candidates list` groups them. A CVE that was ever decided is
+settled once it leaves the window, so ageing alone never reopens a decision;
+decided threats and notices leave with their window.
 
 Feeds that need a look are named at the top, since the list may then be missing
 threats. `drafter candidates list` shows each threat's decision too (over its own

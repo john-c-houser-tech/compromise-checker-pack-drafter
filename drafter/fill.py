@@ -42,9 +42,9 @@ _RHSA = re.compile(r"\ARH[SBE]A-(\d{4}):(\d{1,6})\Z")
 _USN = re.compile(r"\AUSN-\d{1,6}-\d{1,3}\Z")
 _ALSA = re.compile(r"\AALSA-\d{4}:[A-Z0-9]{1,8}\Z")
 _NEVRA = re.compile(
-    r"^(?P<name>[A-Za-z0-9][A-Za-z0-9._+-]*)-(?:(?P<epoch>\d+):)?(?P<version>[^-:]+)-"
+    r"\A(?P<name>[A-Za-z0-9][A-Za-z0-9._+-]*)-(?:(?P<epoch>\d+):)?(?P<version>[^-:]+)-"
     r"(?P<release>[^-:]+)\.(?P<arch>x86_64|aarch64|ppc64le|s390x|noarch|i686|src)"
-    r"(?:::(?P<stream>[A-Za-z0-9._+-]+:[A-Za-z0-9._+-]+))?$"
+    r"(?:::(?P<stream>[A-Za-z0-9._+-]+:[A-Za-z0-9._+-]+))?\Z"
 )
 _EL = re.compile(r"(?:^|\.|\+|_)el(\d{1,2})")
 # The checker's own shapes (checker/packs/format.py): what a pack may hold.
@@ -116,7 +116,7 @@ def keep(binary: str, filters: list[str], family: str) -> bool:
 
 
 # Not "-dbg": RHEL's php-dbg is the phpdbg program, not symbols.
-_DEBUG = re.compile(r"-(debuginfo|debugsource|dbgsym)$")
+_DEBUG = re.compile(r"-(debuginfo|debugsource|dbgsym)\Z")
 
 
 def _names(binaries: list[str]) -> list[str]:
@@ -254,7 +254,7 @@ def ubuntu_entries(record: dict, cve: str, filters: list[str], draft: Draft) -> 
                 " Pro build (the tool reads it as Ubuntu's own: check it by hand)"
             )
             continue
-        match = re.match(r"^Ubuntu:(\d{2}\.\d{2})(?::LTS)?$", ecosystem)
+        match = re.match(r"\AUbuntu:(\d{2}\.\d{2})(?::LTS)?\Z", ecosystem)
         if not match or not candidates.supported(f"ubuntu:{match[1]}"):
             continue
         release = f"ubuntu:{match[1]}"
@@ -513,7 +513,7 @@ def alma_entries(ctx: Context, cve: str, filters: list[str], draft: Draft) -> li
             package = affected.get("package") if isinstance(affected, dict) else None
             if not isinstance(package, dict):
                 continue
-            match = re.match(r"^AlmaLinux:(\d+)$", str(package.get("ecosystem", "")))
+            match = re.match(r"\AAlmaLinux:(\d+)\Z", str(package.get("ecosystem", "")))
             if not match or not candidates.supported(f"rhel:{match[1]}"):
                 continue
             for r in affected.get("ranges") or []:

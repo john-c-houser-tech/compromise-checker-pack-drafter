@@ -151,16 +151,23 @@ def view(site: Site, store: Store) -> dict:
     # decision reads the same in both.
     found = candidates.classify(store, since, now=now)
     recent = candidates.threats(found)
-    # Then threats still to decide that were first signalled before the window,
-    # grouped among themselves only, so they never change the window's groups. They
-    # stay (marked) until someone decides them, instead of dropping off unseen.
-    in_window = {c.cve for c in found}
-    wide = timeutil.fmt(now - max(OPEN_FOR, dt.timedelta(days=site.days)))
-    before = [c for c in candidates.classify(store, wide, now=now) if c.cve not in in_window]
-    earlier = [g for g in candidates.threats(before) if g.kind in decisions.DECIDABLE]
     decided = decisions.history(store)
     by_cve = decisions.latest(decided)
-    listed = {c.cve for g in recent + earlier for c in g.candidates}
+    # Then CVEs first signalled before the window that no decision has touched,
+    # grouped among themselves only, so they never change the window's groups. They
+    # stay (marked) until someone decides them, instead of dropping off unseen; a
+    # CVE ever decided is settled once it leaves the window, so ageing alone never
+    # reopens a decision.
+    in_window = {c.cve for c in found}
+    wide = timeutil.fmt(now - max(OPEN_FOR, dt.timedelta(days=site.days)))
+    before = [
+        c
+        for c in candidates.classify(store, wide, now=now)
+        if c.cve not in in_window and c.cve not in by_cve
+    ]
+    earlier = [g for g in candidates.threats(before) if g.kind in decisions.DECIDABLE]
+    # As the command-line list counts it: the window's CVEs only.
+    listed = {c.cve for g in recent for c in g.candidates}
     shown: list[candidates.Threat] = []  # the threats with a form on the page
     sections = []
     for kind, title, blurb in SECTIONS:
@@ -169,8 +176,6 @@ def view(site: Site, store: Store) -> dict:
             if group.kind != kind:
                 continue
             card = _card(group, by_cve, listed, older)
-            if older and not card["state"].open:
-                continue
             cards.append(card)
             if card["decidable"]:
                 shown.append(group)
@@ -391,7 +396,7 @@ class Handler(BaseHTTPRequestHandler):
                             "your reason is kept in its box."
                             if kept["anchor"]
                             else "it has no form now, so here is your reason: "
-                            + decisions.clean_reason(fields["reason"] or "(none)")[:1000]
+                            + _quoted(fields["reason"])
                         ),
                         kept=kept,
                     ),
@@ -430,6 +435,12 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
         finally:
             store.close()
+
+
+def _quoted(reason: str) -> str:
+    """A refused reason as one line, whatever it is (the page escapes it)."""
+    text = " ".join("".join(ch if ch.isprintable() else " " for ch in reason).split())
+    return text[: decisions.MAX_REASON] or "(none)"
 
 
 def _unreadable(exc: Exception) -> str:

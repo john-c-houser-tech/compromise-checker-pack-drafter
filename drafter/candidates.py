@@ -523,7 +523,7 @@ _UBUNTU_KERNEL = re.compile(
     r"^linux(-(signed|meta|restricted-modules|restricted-signatures|unsigned))?"
     r"(-(allwinner|aws|azure|bluefield|dell|euclid|fips|gcp|gke|gkeop|hwe|ibm|intel|iot|kvm"
     r"|lowlatency|lts|mtk|nvidia|oem|oracle|raspi|realtime|riscv|snapdragon|starfive|vmware"
-    r"|xilinx)([-.a-z0-9]*)?)?$"
+    r"|xilinx)([-.a-z0-9]*)?)?\Z"
 )
 
 

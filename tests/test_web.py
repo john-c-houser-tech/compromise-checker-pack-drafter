@@ -535,3 +535,54 @@ def test_a_reason_with_no_box_left_is_shown_in_the_message(page):
     response, html = page.post(page.form(reason="keep this somewhere"))
     assert response.status == 409
     assert "here is your reason: keep this somewhere" in html
+
+
+def test_a_decision_straddling_the_window_edge_stays_decided(page, capsys):
+    s = Store(page.site.store_path)
+    _nginx(s, "CVE-2026-4001", "2026-10-09T00:00:00.000000Z")
+    _nginx(s, "CVE-2026-4002", "2026-10-15T00:00:00.000000Z")
+    s.close()
+    page.site.days = 30  # both in the window: one threat
+    body = page.form(cves="CVE-2026-4001,CVE-2026-4002", families="nginx", reason="both ok")
+    assert page.post(body)[0].status == 303
+    page.site.days = 27  # 4001 has left the window, 4002 hasn't
+    _, html = page.request("GET")
+    assert 'id="t-cve-2026-4001"' not in html  # decided: not back as older
+    card = html.split('id="t-cve-2026-4002"', 1)[1].split("</article>", 1)[0]
+    assert "Approved" in card and "Look again" not in card
+    home = str(page.site.home)
+    assert cli.main(["--home", home, "candidates", "list", "--days", "27"]) == 0
+    assert "decision: approved 2026-11-07: both ok" in capsys.readouterr().out
+
+
+def test_a_stale_form_for_a_decided_older_threat_is_refused(page):
+    s = Store(page.site.store_path)
+    _nginx(s, "CVE-2026-5001", "2026-09-01T00:00:00.000000Z")
+    s.close()
+    page.site.days = 30
+    body = page.form(cves="CVE-2026-5001", families="nginx", reason="yes")
+    assert page.post(body)[0].status == 303
+    stale = page.form(cves="CVE-2026-5001", families="nginx", verdict="reject", reason="no")
+    assert page.post(stale)[0].status == 409
+    assert [d.verdict for d in _stored(page)] == ["approve"]
+
+
+@pytest.mark.parametrize("reason", ["   ", "x" * 1500, "a\x00b"])
+def test_a_refused_form_with_any_reason_gets_its_page(page, reason):
+    s = Store(page.site.store_path)
+    for cve in PHP:
+        _vendor(s, cve, "ubuntu", [_pkg("ubuntu:24.04", "linux-aws")])
+        _vendor(s, cve, "redhat", [], found=0)
+    s.close()
+    response, html = page.post(page.form(reason=reason))
+    assert response.status == 409 and "here is your reason:" in html
+    if not reason.strip():
+        assert "here is your reason: (none)" in html
+
+
+def test_a_time_is_read_without_its_surrounding_space_and_only_then():
+    from drafter import timeutil
+
+    assert timeutil.parse("2026-11-02T00:00:00Z\n") == timeutil.parse("2026-11-02")
+    with pytest.raises(timeutil.TimeError):
+        timeutil.parse("2026-11-02T00:00:00Z\nX")
