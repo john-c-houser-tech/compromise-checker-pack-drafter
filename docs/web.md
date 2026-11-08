@@ -14,8 +14,14 @@ judge** and **Third-party builds** with a form each; **Kernels** (a notice only,
 plan D2) and **Set aside** (changed in `setaside.toml`, not here) without one.
 Below them, the CVEs that aren't threats here yet, and every decision made.
 
+A threat still to decide (undecided, or Look again) stays on the page after its
+last sign is older than `--days`, marked "No sign in 30 days", until someone
+decides it: the page reads back 180 days, as far as `candidates refresh` keeps
+vendor records current. Decided threats and notices leave when their window ends.
+
 Feeds that need a look are named at the top, since the list may then be missing
-threats. `drafter candidates list` shows each threat's decision too.
+threats. `drafter candidates list` shows each threat's decision too (over its own
+window, 30 days by default).
 
 ## Decisions
 
@@ -24,13 +30,16 @@ threats. `drafter candidates list` shows each threat's decision too.
 - **Append-only.** A decision is never changed or removed (the store refuses
   both). Deciding again adds a new decision that stands in front of the old one;
   both stay in the record.
-- **Kept with its CVEs.** The list groups CVEs into threats afresh on every run,
-  so a decision keeps the CVEs it was made on. If a CVE joins a decided threat
-  later, or its CVEs were decided apart, the threat reads **Look again** and gets
-  its form back.
-- **Checked against the list as it is now.** A form for a threat whose CVEs or
-  section changed since the page loaded is refused (409), and the page shows the
-  threat as it now stands.
+- **Kept with what was shown.** The list groups CVEs into threats afresh on every
+  run, so a decision keeps the CVEs, section and package families it was made on.
+  A threat stands under a decision only while all three still match. It reads
+  **Look again**, with its form back, if a CVE joined it, one of the decision's
+  CVEs is now in another threat, its CVEs were decided apart, it moved section
+  (third-party to vendor packages, say), or its package families changed. A CVE
+  that has only aged off the list doesn't count.
+- **Checked against the list as it is now.** A form for a threat whose CVEs,
+  section or package families changed since the page loaded is refused (409);
+  the page shows the threat as it now stands, with the reason kept in its box.
 
 ## Safety
 
@@ -39,13 +48,17 @@ no login. Any site open in the same browser could still send a form to it, so a
 decision is taken only when:
 
 - the `Origin` is the page's own (`--origin`, or 127.0.0.1 and localhost on its
-  port), and `Sec-Fetch-Site`, when the browser sends it, says same-origin;
+  port), and `Sec-Fetch-Site`, when the browser sends it, says same-origin. (The
+  page's referrer policy is `same-origin`, not `no-referrer`: with `no-referrer`
+  a browser sends `Origin: null` on the page's own forms, and `null` is refused,
+  since sandboxed frames on any site send it too);
 - the form carries the token of this run of the server (restarting it means
   loading the page again);
 - it is an ordinary form post of at most 8 KB; and
 - the `Host` is one the page answers to, which also stops a hostile name being
   pointed at 127.0.0.1 to read the page.
 
+One slow client can't hold up the page (a thread per request).
 Everything shown comes from the feeds and is escaped. The page runs no scripts,
 and its Content-Security-Policy allows none; it can't be framed.
 

@@ -9,16 +9,17 @@ A CVE that joined later, or CVEs decided apart, make it ask for a look again.
 from __future__ import annotations
 
 import json
-import re
+from collections.abc import Collection
 from dataclasses import dataclass
 
 from drafter.candidates import Threat
+from drafter.feeds import CVE_ID
 from drafter.store import Store
 
 DECIDABLE = ("judge", "thirdparty")  # kernels get a notice (D2); set-asides a file edit
+SECTION_NAMES = {"judge": "Can judge", "thirdparty": "Third-party builds"}
 VERDICTS = ("approve", "reject")
 MAX_REASON = 1000
-_CVE = re.compile(r"^CVE-\d{4}-\d{4,7}$")
 
 
 class DecisionError(ValueError):
@@ -45,6 +46,9 @@ class State:
     decision: Decision | None = None  # the one it stands under, or the latest it touched
     new: tuple[str, ...] = ()  # CVEs no decision covers
     apart: tuple[str, ...] = ()  # CVEs under another decision than `decision`
+    moved: tuple[str, ...] = ()  # CVEs `decision` covered that are in another threat now
+    section: str | None = None  # the section `decision` was made in, if not this one
+    families: tuple[str, ...] | None = None  # what `decision` was shown, if not these
 
     @property
     def open(self) -> bool:
@@ -75,7 +79,7 @@ def record(
         raise DecisionError("the verdict is approve or reject")
     reason = clean_reason(reason)
     cves = tuple(sorted({c.cve for c in threat.candidates}))
-    if not cves or not all(_CVE.match(cve) for cve in cves):
+    if not cves or not all(CVE_ID.match(cve) for cve in cves):
         raise DecisionError("a threat is one or more CVE numbers")
     by = " ".join(by.split())[:100] or "?"
     with store.transaction():
@@ -127,7 +131,11 @@ def latest(decided: list[Decision]) -> dict[str, Decision]:
     return out
 
 
-def state(threat: Threat, by_cve: dict[str, Decision]) -> State:
+def state(threat: Threat, by_cve: dict[str, Decision], listed: Collection[str] = ()) -> State:
+    """A threat stands under a decision only if that decision was made on just
+    these CVEs, in this section, shown with these package families. `listed`: the
+    CVEs in any threat now, so one of the decision's CVEs that has since moved to
+    another threat counts, and one that has aged off the list doesn't."""
     cves = sorted({c.cve for c in threat.candidates})
     under = {cve: by_cve[cve] for cve in cves if cve in by_cve}
     if not under:
@@ -135,8 +143,11 @@ def state(threat: Threat, by_cve: dict[str, Decision]) -> State:
     newest = max(under.values(), key=lambda d: d.id)
     new = tuple(cve for cve in cves if cve not in under)
     apart = tuple(cve for cve, d in under.items() if d.id != newest.id)
-    if new or apart:
-        return State("again", newest, new, apart)
+    moved = tuple(cve for cve in newest.cves if cve not in cves and cve in listed)
+    section = newest.kind if newest.kind != threat.kind else None
+    families = newest.families if newest.families != tuple(threat.families) else None
+    if new or apart or moved or section or families is not None:
+        return State("again", newest, new, apart, moved, section, families)
     return State(newest.verdict, newest)
 
 
@@ -153,4 +164,10 @@ def describe(st: State) -> str:
         parts.append(f"{', '.join(st.new)} came after it")
     if st.apart:
         parts.append(f"{', '.join(st.apart)} decided apart")
+    if st.moved:
+        parts.append(f"{', '.join(st.moved)} now in another threat")
+    if st.section:
+        parts.append(f"made under {SECTION_NAMES.get(st.section, st.section)}")
+    if st.families is not None:
+        parts.append(f"shown as {', '.join(st.families) or '?'}")
     return f"look again: {said}, but {'; '.join(parts)}"

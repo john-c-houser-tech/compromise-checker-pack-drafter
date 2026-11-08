@@ -20,7 +20,8 @@ from drafter.store import FeedState, Store
 
 log = logging.getLogger(__name__)
 
-CVE_ID = re.compile(r"^CVE-\d{4}-\d{4,9}$")
+# \A and \Z, not ^ and $: "$" also matches before a final newline.
+CVE_ID = re.compile(r"\ACVE-\d{4}-\d{4,9}\Z")
 
 
 class FeedError(Exception):

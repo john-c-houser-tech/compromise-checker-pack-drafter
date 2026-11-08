@@ -156,6 +156,7 @@ class Page:
             "token": self.site.token,
             "kind": "judge",
             "cves": ",".join(PHP),
+            "families": "php",
             "verdict": "approve",
             "reason": "PHP2Shell",
         }
@@ -249,15 +250,27 @@ def test_the_page_answers_only_to_its_own_names(page):
 @pytest.mark.parametrize(
     ("body", "status"),
     [
-        ("token=x&kind=judge&cves=CVE-2026-109618,CVE-2026-109619&verdict=approve&reason=r", 403),
-        ("token=T&kind=judge&cves=CVE-2026-109618&verdict=approve&reason=r", 409),
-        ("token=T&kind=kernel&cves=CVE-2026-98432&verdict=approve&reason=r", 400),
-        ("token=T&kind=judge&cves=CVE-2026-109618,CVE-2026-109619&verdict=maybe&reason=r", 400),
-        ("token=T&kind=judge&cves=CVE-2026-109618,CVE-2026-109619&verdict=approve&reason=+", 400),
-        ("token=T&kind=judge&cves=CVE-2026-109618,CVE-2026-109619&verdict=approve", 400),
         (
-            "token=T&kind=judge&cves=CVE-2026-109618,CVE-2026-109619&verdict=approve"
-            "&verdict=reject&reason=r",
+            "token=x&kind=judge&cves=CVE-2026-109618,CVE-2026-109619&families=php&verdict=approve&reason=r",
+            403,
+        ),
+        ("token=T&kind=judge&cves=CVE-2026-109618&families=php&verdict=approve&reason=r", 409),
+        ("token=T&kind=kernel&cves=CVE-2026-98432&families=kernel&verdict=approve&reason=r", 400),
+        (
+            "token=T&kind=judge&cves=CVE-2026-109618,CVE-2026-109619&families=php&verdict=maybe&reason=r",
+            400,
+        ),
+        (
+            "token=T&kind=judge&cves=CVE-2026-109618,CVE-2026-109619&families=php&verdict=approve&reason=+",
+            400,
+        ),
+        (
+            "token=T&kind=judge&cves=CVE-2026-109618,CVE-2026-109619&families=php&verdict=approve",
+            400,
+        ),
+        (
+            "token=T&kind=judge&cves=CVE-2026-109618,CVE-2026-109619&families=php"
+            "&verdict=approve&verdict=reject&reason=r",
             400,
         ),
         ("token=T&a=1&&b", 400),
@@ -308,3 +321,155 @@ def test_feed_text_is_escaped(page):
 def test_only_listed_files_are_served(page):
     for path in ("/../drafter.sqlite3", "/fonts/../style.css", "/static/style.css", "/x"):
         assert page.request("GET", path)[0].status == 404
+
+
+# review fixes
+
+
+def test_a_real_browser_sends_its_origin_on_the_pages_own_forms(page):
+    # `no-referrer` makes a browser send `Origin: null`, which is refused.
+    response, _ = page.request("GET")
+    assert response.getheader("Referrer-Policy") == "same-origin"
+
+
+def _move_php_to_thirdparty(store):
+    for cve in PHP:
+        _nvd(store, cve, "2026-10-21T00:00:00.000000Z", products=("php:php",))
+        _vendor(store, cve, "ubuntu", [], found=0)
+        _vendor(store, cve, "redhat", [], found=0)
+
+
+def test_a_decision_made_in_another_section_asks_again(store):
+    _seed(store)
+    decisions.record(store, _php(store), "reject", "not ours", "jch", "t1")
+    _move_php_to_thirdparty(store)
+    threat = next(t for t in _threats(store) if t.kind == "thirdparty")
+    st = decisions.state(threat, decisions.latest(decisions.history(store)))
+    assert st.word == "again" and st.section == "judge"
+    assert "made under Can judge" in decisions.describe(st)
+
+
+def test_a_decision_shown_with_other_packages_asks_again(store):
+    _seed(store)
+    decisions.record(store, _php(store), "approve", "yes", "jch", "t1")
+    for cve in PHP:
+        _vendor(
+            store, cve, "ubuntu", [_pkg("ubuntu:24.04", "php8.3"), _pkg("ubuntu:24.04", "apache2")]
+        )
+    threat = _php(store)
+    st = decisions.state(threat, decisions.latest(decisions.history(store)))
+    assert threat.families == ["apache", "php"]
+    assert st.word == "again" and st.families == ("php",)
+    assert "shown as php" in decisions.describe(st)
+
+
+def test_a_split_asks_again_but_an_aged_off_cve_does_not():
+    d = decisions.Decision(1, "t1", PHP, "judge", ("php",), "approve", "a", "jch")
+    one = c.Threat("judge", ["php"], [c.Candidate(PHP[0], [], "judge")])
+    st = decisions.state(one, decisions.latest([d]), listed={PHP[0], PHP[1]})
+    assert st.word == "again" and st.moved == (PHP[1],)
+    assert "now in another threat" in decisions.describe(st)
+    assert decisions.state(one, decisions.latest([d]), listed={PHP[0]}).word == "approve"
+
+
+@pytest.mark.parametrize("value", ["CVE-2026-109618\n", "CVE-2026-109618\r", " CVE-2026-109618"])
+def test_a_cve_with_anything_around_it_is_not_a_cve(value):
+    from drafter.feeds import cve_or_none
+
+    assert cve_or_none(value) is None
+
+
+def test_a_nine_digit_cve_can_be_decided(store):
+    cve = "CVE-2026-123456789"
+    _nvd(store, cve, "2026-10-21T00:00:00.000000Z")
+    _vendor(store, cve, "ubuntu", [_pkg("ubuntu:24.04", "php8.3")])
+    _vendor(store, cve, "redhat", [], found=0)
+    d = decisions.record(store, _php(store), "approve", "yes", "jch", "t1")
+    assert d.cves == (cve,)
+
+
+def test_a_409_keeps_the_reason_where_the_threat_now_is(page):
+    s = Store(page.site.store_path)
+    early = "CVE-2026-100000"
+    _nvd(s, early, "2026-10-22T00:00:00.000000Z")
+    _vendor(s, early, "ubuntu", [_pkg("ubuntu:24.04", "php8.3")])
+    _vendor(s, early, "redhat", [_pkg("rhel:9", "php")])
+    s.close()
+    response, html = page.post(page.form(reason="kept for later"))
+    assert response.status == 409
+    box = re.search(r'id="r-t-cve-2026-100000"[^>]*>([^<]*)</textarea>', html)
+    assert box and box.group(1) == "kept for later"
+    assert _stored(page) == []
+
+
+def test_a_form_for_other_packages_than_now_is_refused(page):
+    response, _ = page.post(page.form(families="apache2,php"))
+    assert response.status == 409
+    assert _stored(page) == []
+
+
+def test_a_busy_store_keeps_the_reason(page, monkeypatch):
+    def busy(*args, **kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(decisions, "record", busy)
+    response, html = page.post(page.form(reason="try me again"))
+    assert response.status == 503
+    assert "Nothing was recorded" in html and ">try me again</textarea>" in html
+
+
+def test_a_store_that_cant_be_read_is_a_503_not_a_dropped_connection(page, monkeypatch):
+    def broken(*args, **kwargs):
+        raise sqlite3.OperationalError("disk I/O error")
+
+    monkeypatch.setattr(web, "view", broken)
+    assert page.request("GET")[0].status == 503
+    assert page.post(page.form())[0].status == 503
+
+
+def test_a_newer_store_says_to_restart_the_page(page):
+    db = sqlite3.connect(page.site.store_path)
+    db.execute("PRAGMA user_version = 99")
+    db.close()
+    response, text = page.request("GET")
+    assert response.status == 503 and "systemctl --user restart pack-drafter-web" in text
+
+
+def test_one_slow_client_does_not_hold_up_the_page(page):
+    import socket
+
+    slow = socket.create_connection(("127.0.0.1", page.site.port))
+    slow.sendall(b"GET / HTTP/1.1\r\nHo")  # and nothing more
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", page.site.port, timeout=2)
+        conn.request("GET", "/style.css", headers={"Host": f"127.0.0.1:{page.site.port}"})
+        assert conn.getresponse().status == 200
+        conn.close()
+    finally:
+        slow.close()
+
+
+def test_web_refuses_odd_flags_and_a_busy_store(tmp_path, monkeypatch, capsys):
+    home = ["--home", str(tmp_path), "web"]
+    assert cli.main([*home, "--days", "0"]) == 2
+    assert cli.main([*home, "--days", "999999999"]) == 2
+    assert cli.main([*home, "--origin", "https://packs.localhost:8443/x"]) == 2
+
+    def busy(site):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(web, "make_server", busy)
+    assert cli.main(home) == 1
+    assert "database is locked" in capsys.readouterr().err
+
+
+def test_a_threat_still_to_decide_stays_after_its_window(page):
+    page.site.days = 10  # PHP's last sign is 17 days old, the kernel's 23
+    _, html = page.request("GET")
+    assert 'id="t-cve-2026-109618"' in html and "No sign in 10 days" in html
+    assert "and 1 older still to decide" in html
+    assert 'id="t-cve-2026-98432"' not in html  # a notice only: it goes
+    assert page.post(page.form())[0].status == 303
+    _, html = page.request("GET")
+    assert 'id="t-cve-2026-109618"' not in html  # decided: it goes too
+    assert "still to decide" not in html

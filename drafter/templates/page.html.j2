@@ -13,7 +13,7 @@
     <img class="mark" src="/favicon.svg" alt="" width="28" height="28">
     <div>
       <div class="bar-title">Pack drafter</div>
-      <div class="bar-sub">Threats signalled in the last {{ days }} days, since {{ since }}</div>
+      <div class="bar-sub">Threats signalled in the last {{ days }} days, since {{ since }}{% if older %}, and {{ older }} older still to decide{% endif %}</div>
     </div>
   </div>
 </header>
@@ -47,6 +47,7 @@
     <div class="card-head">
       <h3>{{ c.name }}</h3>
       <span class="date">first signalled {{ c.first }}</span>
+      {% if c.older %}<span class="pill pill-again">No sign in {{ days }} days</span>{% endif %}
       {% if c.decidable %}
         {% if st.word == "approve" %}<span class="pill pill-approve">Approved</span>
         {% elif st.word == "reject" %}<span class="pill pill-reject">Rejected</span>
@@ -73,6 +74,9 @@
         <q>{{ d.reason }}</q>
         {% if st.new %}<br><strong>Came after it:</strong> {{ st.new|join(", ") }}{% endif %}
         {% if st.apart %}<br><strong>Decided apart:</strong> {{ st.apart|join(", ") }}{% endif %}
+        {% if st.moved %}<br><strong>Now in another threat:</strong> {{ st.moved|join(", ") }}{% endif %}
+        {% if st.section %}<br><strong>Made under:</strong> {{ "Can judge" if st.section == "judge" else "Third-party builds" }}{% endif %}
+        {% if st.families is not none %}<br><strong>Shown then as:</strong> {{ st.families|join(", ") or "?" }}{% endif %}
       </p>
       {% endif %}
       {% set keep = kept.reason if kept.anchor == c.anchor else "" %}
@@ -85,6 +89,7 @@
         <input type="hidden" name="token" value="{{ token }}">
         <input type="hidden" name="kind" value="{{ c.kind }}">
         <input type="hidden" name="cves" value="{{ c.cves|join(',') }}">
+        <input type="hidden" name="families" value="{{ c.families }}">
         <label for="r-{{ c.anchor }}">Reason</label>
         <textarea id="r-{{ c.anchor }}" name="reason" rows="2" maxlength="1000" required>{{ keep }}</textarea>
         <div class="buttons">

@@ -19,6 +19,7 @@ import datetime as dt
 import fcntl
 import logging
 import os
+import sqlite3
 import sys
 import time
 import unicodedata
@@ -292,6 +293,7 @@ def _candidates_list(store: Store, args) -> int:
     since = _window(args)
     found = candidates.classify(store, since)
     by_cve = decisions.latest(decisions.history(store))
+    listed = {c.cve for group in candidates.threats(found) for c in group.candidates}
     print(
         safe_lines(
             candidates.render(
@@ -299,7 +301,7 @@ def _candidates_list(store: Store, args) -> int:
                 since,
                 notes,
                 show_all=args.all,
-                decided=lambda threat: decisions.describe(decisions.state(threat, by_cve)),
+                decided=lambda threat: decisions.describe(decisions.state(threat, by_cve, listed)),
             )
         )
     )
@@ -416,13 +418,14 @@ def _web(home: Path, args) -> int:
     if parts.scheme not in ("http", "https") or not parts.netloc or parts.path:
         print("--origin is a scheme and host, like https://packs.localhost:8443", file=sys.stderr)
         return 2
-    if not 0 < args.port < 65536 or args.days < 1:
-        print("--port is 1 to 65535 and --days at least 1", file=sys.stderr)
+    if not 0 < args.port < 65536 or not 0 < args.days <= 3650:
+        print("--port is 1 to 65535 and --days 1 to 3650", file=sys.stderr)
         return 2
     site = web.Site(home=home, port=args.port, origin=origin, days=args.days)
     try:
         server = web.make_server(site)
-    except (StoreError, OSError) as exc:
+    except (StoreError, OSError, sqlite3.Error) as exc:
+        # sqlite3.Error: the store busy while it is upgraded (the hourly run).
         print(safe(exc), file=sys.stderr)
         return 1
     print(f"the candidate page: {origin} (listening on 127.0.0.1:{args.port})", flush=True)

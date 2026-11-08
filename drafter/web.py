@@ -22,7 +22,7 @@ import urllib.parse
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from http import HTTPStatus
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
 from pathlib import Path
 
@@ -37,6 +37,10 @@ log = logging.getLogger(__name__)
 DEFAULT_PORT = 8089
 DEFAULT_ORIGIN = "https://packs.localhost:8443"
 MAX_BODY = 8 * 1024
+# How far back the page reads, so a threat still to decide stays on it after its
+# last sign is older than --days: as far back as `candidates refresh` keeps vendor
+# records current (its default window).
+OPEN_FOR = dt.timedelta(days=180)
 CSP = (
     "default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self';"
     " form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
@@ -106,7 +110,16 @@ def anchor(threat: candidates.Threat) -> str:
     return "t-" + min(c.cve for c in threat.candidates).lower()
 
 
-def _card(threat: candidates.Threat, by_cve: dict[str, decisions.Decision]) -> dict:
+def _last_sign(cands: list[candidates.Candidate]) -> dt.datetime:
+    return max(timeutil.parse(s.when) for c in cands for s in c.signals)
+
+
+def _card(
+    threat: candidates.Threat,
+    by_cve: dict[str, decisions.Decision],
+    listed: set[str],
+    recent: dt.datetime,
+) -> dict:
     cands = threat.candidates
     via, repos = [], []
     for cand in cands:
@@ -121,6 +134,7 @@ def _card(threat: candidates.Threat, by_cve: dict[str, decisions.Decision]) -> d
         "kind": threat.kind,
         "first": threat.first[:10],
         "name": ", ".join(threat.families) or "?",
+        "families": ",".join(threat.families),
         "cves": sorted(c.cve for c in cands),
         "signals": sorted({s.describe() for c in cands for s in c.signals}),
         "packages": candidates._releases([p for c in cands for p in c.packages]),
@@ -129,20 +143,31 @@ def _card(threat: candidates.Threat, by_cve: dict[str, decisions.Decision]) -> d
         "repos": repos,
         "reasons": sorted({r for c in cands for r in c.reasons}),
         "decidable": threat.kind in decisions.DECIDABLE,
-        "state": decisions.state(threat, by_cve),
+        "state": decisions.state(threat, by_cve, listed),
+        "older": _last_sign(cands) < recent,
     }
 
 
 def view(site: Site, store: Store) -> dict:
     now = site.now()
-    since = timeutil.fmt(now - dt.timedelta(days=site.days))
-    found = candidates.classify(store, since, now=now)
+    recent = now - dt.timedelta(days=site.days)
+    since = timeutil.fmt(recent)
+    # Read further back than shown: a threat still to decide stays on the page
+    # (marked older) until someone decides it, rather than dropping off unseen.
+    wide = timeutil.fmt(now - max(OPEN_FOR, dt.timedelta(days=site.days)))
+    found = candidates.classify(store, wide, now=now)
     groups = candidates.threats(found)
     decided = decisions.history(store)
     by_cve = decisions.latest(decided)
+    listed = {c.cve for g in groups for c in g.candidates}
     sections = []
     for kind, title, blurb in SECTIONS:
-        cards = [_card(g, by_cve) for g in groups if g.kind == kind]
+        cards = [_card(g, by_cve, listed, recent) for g in groups if g.kind == kind]
+        cards = [
+            card
+            for card in cards
+            if not card["older"] or (card["decidable"] and card["state"].open)
+        ]
         sections.append(
             {
                 "kind": kind,
@@ -158,9 +183,10 @@ def view(site: Site, store: Store) -> dict:
         "days": site.days,
         "notes": needing_a_look(store, now),
         "sections": sections,
-        "unnamed": [c for c in found if c.kind == "unnamed"],
-        "elsewhere": sum(1 for c in found if c.kind == "elsewhere"),
-        "unread": [c.cve for c in found if c.kind == "unread"],
+        "unnamed": [c for c in found if c.kind == "unnamed" and _last_sign([c]) >= recent],
+        "elsewhere": sum(1 for c in found if c.kind == "elsewhere" and _last_sign([c]) >= recent),
+        "unread": [c.cve for c in found if c.kind == "unread" and _last_sign([c]) >= recent],
+        "older": sum(1 for s in sections for card in s["cards"] if card["older"]),
         "history": decided,
         "groups": groups,
     }
@@ -176,12 +202,27 @@ def page(site: Site, data: dict, *, error: str | None = None, kept: dict | None 
     )
 
 
-def find(groups: list[candidates.Threat], kind: str, cves: list[str]):
+def find(groups: list[candidates.Threat], kind: str, cves: list[str], families: list[str]):
+    """The threat the form was for, if it is still just as the page showed it."""
     wanted = sorted(cves)
     for group in groups:
-        if group.kind == kind and sorted(c.cve for c in group.candidates) == wanted:
+        if (
+            group.kind == kind
+            and sorted(c.cve for c in group.candidates) == wanted
+            and list(group.families) == families
+        ):
             return group
     return None
+
+
+def nearest(groups: list[candidates.Threat], cves: list[str]) -> str:
+    """The anchor of the threat that now holds most of these CVEs, or ""."""
+    best, most = "", 0
+    for group in groups:
+        shared = len({c.cve for c in group.candidates} & set(cves))
+        if shared > most:
+            best, most = anchor(group), shared
+    return best
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -199,7 +240,9 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Content-Security-Policy", CSP)
         self.send_header("X-Content-Type-Options", "nosniff")
-        self.send_header("Referrer-Policy", "no-referrer")
+        # Not no-referrer: a page with that policy sends `Origin: null` on its own
+        # forms, which _refuse must turn away (sandboxed frames send it too).
+        self.send_header("Referrer-Policy", "same-origin")
         self.send_header("X-Frame-Options", "DENY")
         self.send_header("Cross-Origin-Resource-Policy", "same-origin")
         for name, value in (extra or {}).items():
@@ -238,12 +281,16 @@ class Handler(BaseHTTPRequestHandler):
         try:
             store = Store(self.site.store_path, read_only=True)
         except (StoreError, sqlite3.Error) as exc:
-            self._text(HTTPStatus.SERVICE_UNAVAILABLE, f"the store can't be read: {exc}")
+            self._text(HTTPStatus.SERVICE_UNAVAILABLE, _unreadable(exc))
             return
         try:
-            self._html(HTTPStatus.OK, page(self.site, view(self.site, store)))
+            data = view(self.site, store)
+        except sqlite3.Error as exc:
+            self._text(HTTPStatus.SERVICE_UNAVAILABLE, f"the store can't be read now: {exc}")
+            return
         finally:
             store.close()
+        self._html(HTTPStatus.OK, page(self.site, data))
 
     def _refuse(self) -> str | None:
         """Why this POST isn't one of this page's own forms, or None."""
@@ -260,13 +307,6 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):  # noqa: N802
         if not self._host_ok():
             return
-        if urllib.parse.urlsplit(self.path).path != "/decide":
-            self._text(HTTPStatus.NOT_FOUND, "not here")
-            return
-        why = self._refuse()
-        if why:
-            self._text(HTTPStatus.FORBIDDEN, why)
-            return
         try:
             length = int(self.headers.get("Content-Length", ""))
         except ValueError:
@@ -275,7 +315,15 @@ class Handler(BaseHTTPRequestHandler):
         if not 0 < length <= MAX_BODY:
             self._text(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, "too long for a decision")
             return
+        # Read before any refusal, so the connection is left clean for Caddy.
         raw = self.rfile.read(length)
+        if urllib.parse.urlsplit(self.path).path != "/decide":
+            self._text(HTTPStatus.NOT_FOUND, "not here")
+            return
+        why = self._refuse()
+        if why:
+            self._text(HTTPStatus.FORBIDDEN, why)
+            return
         try:
             form = urllib.parse.parse_qs(
                 raw.decode("utf-8"),
@@ -287,9 +335,14 @@ class Handler(BaseHTTPRequestHandler):
             self._text(HTTPStatus.BAD_REQUEST, "the form couldn't be read")
             return
         fields = {name: values[0] for name, values in form.items() if len(values) == 1}
-        if set(fields) != set(form) or not {"token", "kind", "cves", "verdict", "reason"} <= set(
-            fields
-        ):
+        if set(fields) != set(form) or not {
+            "token",
+            "kind",
+            "cves",
+            "families",
+            "verdict",
+            "reason",
+        } <= set(fields):
             self._text(HTTPStatus.BAD_REQUEST, "the form is missing a field")
             return
         if not hmac.compare_digest(fields["token"].encode(), self.site.token.encode()):
@@ -305,21 +358,27 @@ class Handler(BaseHTTPRequestHandler):
         try:
             store = Store(self.site.store_path)
         except (StoreError, sqlite3.Error) as exc:
-            self._text(HTTPStatus.SERVICE_UNAVAILABLE, f"the store can't be opened: {exc}")
+            self._text(HTTPStatus.SERVICE_UNAVAILABLE, _unreadable(exc))
             return
         try:
-            data = view(self.site, store)
+            try:
+                data = view(self.site, store)
+            except sqlite3.Error as exc:
+                self._text(HTTPStatus.SERVICE_UNAVAILABLE, f"the store is busy; try again: {exc}")
+                return
             cves = [c for c in fields["cves"].split(",") if c]
-            threat = find(data["groups"], fields["kind"], cves)
-            kept = {"anchor": "t-" + min(cves).lower() if cves else "", "reason": fields["reason"]}
+            families = [f for f in fields["families"].split(",") if f]
+            threat = find(data["groups"], fields["kind"], cves, families)
+            kept = {"anchor": nearest(data["groups"], cves), "reason": fields["reason"]}
             if threat is None:
                 self._html(
                     HTTPStatus.CONFLICT,
                     page(
                         self.site,
                         data,
-                        error="That threat changed since the page loaded (a CVE joined it, or"
-                        " it moved section). Look at it again below.",
+                        error="That threat changed since the page loaded (a CVE joined or"
+                        " left it, its packages changed, or it moved section). Look at it"
+                        " again below; your reason is kept in its box.",
                         kept=kept,
                     ),
                 )
@@ -340,7 +399,16 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 return
             except sqlite3.OperationalError as exc:
-                self._text(HTTPStatus.SERVICE_UNAVAILABLE, f"the store is busy; try again: {exc}")
+                self._html(
+                    HTTPStatus.SERVICE_UNAVAILABLE,
+                    page(
+                        self.site,
+                        data,
+                        error=f"The store is busy (the hourly run?): {exc}. Nothing was"
+                        " recorded; send it again in a moment.",
+                        kept=kept,
+                    ),
+                )
                 return
             self.send_response(HTTPStatus.SEE_OTHER)
             self.send_header("Location", f"/#{anchor(threat)}")
@@ -350,8 +418,24 @@ class Handler(BaseHTTPRequestHandler):
             store.close()
 
 
-def make_server(site: Site) -> HTTPServer:
+def _unreadable(exc: Exception) -> str:
+    text = f"the store can't be opened: {exc}"
+    if isinstance(exc, StoreError):
+        text += (
+            ". If the drafter was installed again, restart this page so it runs the same"
+            " code: systemctl --user restart pack-drafter-web"
+        )
+    return text
+
+
+class Server(ThreadingHTTPServer):
+    # A thread per request, so one slow client can't hold up the rest; each request
+    # opens its own Store.
+    daemon_threads = True
+
+
+def make_server(site: Site) -> Server:
     # The store is upgraded here, once, rather than by the first page load.
     Store(site.store_path).close()
     handler = type("SiteHandler", (Handler,), {"site": site})
-    return HTTPServer(("127.0.0.1", site.port), handler)
+    return Server(("127.0.0.1", site.port), handler)
