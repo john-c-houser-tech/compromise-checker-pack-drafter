@@ -17,7 +17,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 _SCHEMA = """
 CREATE TABLE fetches (
@@ -200,6 +200,33 @@ CREATE TRIGGER decision_kept BEFORE UPDATE ON decision
 BEGIN SELECT RAISE(ABORT, 'decisions are append-only'); END;
 CREATE TRIGGER decision_not_removed BEFORE DELETE ON decision
 BEGIN SELECT RAISE(ABORT, 'decisions are append-only'); END;
+""",
+    6: """
+-- A.5: every request sent to the AI, with what it cost (D6's caps are summed from
+-- here). A row goes in before the request is sent, at the most it could cost, and
+-- is settled with the real figures when the answer comes; one never settled (the
+-- run killed mid-request) keeps its worst case, so spending is never undercounted.
+-- Never removed (decisions' triggers forbid only that here: settling is an update).
+CREATE TABLE ai_request (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sent_at TEXT NOT NULL,
+    cves TEXT NOT NULL,           -- JSON list: the approved threat drafted
+    decision_id INTEGER NOT NULL REFERENCES decision(id),
+    model TEXT NOT NULL,
+    attempt INTEGER NOT NULL,     -- 1, or 2 when the first answer was refused
+    settled INTEGER NOT NULL DEFAULT 0,
+    request_id TEXT,
+    stop_reason TEXT,             -- the model's, or what went wrong
+    input_tokens INTEGER,
+    output_tokens INTEGER,
+    cache_write_tokens INTEGER,
+    cache_read_tokens INTEGER,
+    cost REAL NOT NULL,           -- dollars: the worst case until settled
+    answer TEXT,                  -- the answer as it came, untrusted
+    problems TEXT                 -- JSON list: why it was refused, if it was
+);
+CREATE TRIGGER ai_request_kept BEFORE DELETE ON ai_request
+BEGIN SELECT RAISE(ABORT, 'the record of AI spending is kept'); END;
 """,
 }
 

@@ -11,8 +11,9 @@ license = "AGPL-3.0-only"
 license-files = ["LICENSE"]
 requires-python = ">=3.12"
 # Feeds are read with the standard library; PyYAML reads signed packs (A.3);
-# Jinja2 writes the candidate page (A.4).
-dependencies = ["PyYAML>=6.0.3", "Jinja2>=3.1.6"]
+# Jinja2 writes the candidate page (A.4); pydantic is the checker's pack format,
+# copied in (drafter/checkerformat), and anthropic drafts the prose (A.5).
+dependencies = ["PyYAML>=6.0.3", "Jinja2>=3.1.6", "pydantic>=2.14.1", "anthropic>=2.3"]
 
 [project.optional-dependencies]
 dev = ["pytest>=9", "ruff>=0.14"]
@@ -37,9 +38,12 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+# The checker's own pack format, copied as it is (and compared with it in a test).
+extend-exclude = ["drafter/checkerformat"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "S"]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101", "S108"]  # asserts; /tmp paths as data
+"tests/**" = ["S101", "S108", "S607"]  # asserts; /tmp paths as data; git from PATH
+"drafter/vocabulary.py" = ["E501"]  # the checker's own titles, as it has them

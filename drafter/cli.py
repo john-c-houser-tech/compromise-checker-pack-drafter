@@ -5,6 +5,7 @@
     drafter feeds status
     drafter candidates refresh|list|add …
     drafter fill CVE … / drafter propose CVE …
+    drafter draft CVE … [--out FILE] [--dry-run] / drafter spend
     drafter web [--port N] [--origin URL] [--packs DIR]
     drafter decisions
 
@@ -17,6 +18,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import fcntl
+import json
 import logging
 import os
 import sqlite3
@@ -152,6 +154,23 @@ def _parser() -> argparse.ArgumentParser:
     prop.add_argument("--watch", metavar="CPE", help="the watched product, e.g. php:php")
     prop.add_argument("--out", type=Path, required=True, help="the proposals file to write")
 
+    drafting = commands.add_parser(
+        "draft", help="an AI draft of an approved threat's title, detections and remediation (A.5)"
+    )
+    drafting.add_argument("cves", nargs="+", metavar="CVE")
+    drafting.add_argument("--out", type=Path, help="write the draft here (default: print it)")
+    drafting.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="show what would be sent and its most possible cost; send nothing",
+    )
+    drafting.add_argument(
+        "--past-tell-mark",
+        action="store_true",
+        help="go on past the $5 at which John asked to be told (only once he has said so)",
+    )
+    commands.add_parser("spend", help="every request sent to the AI, and the caps (A.5)")
+
     web = commands.add_parser("web", help="the candidate page, to approve or reject (A.4)")
     web.add_argument("--port", type=int, default=8089, help="on 127.0.0.1 (default: %(default)s)")
     web.add_argument(
@@ -194,13 +213,19 @@ def main(argv: list[str] | None = None) -> int:
     known = by_name()
     if args.command == "web":
         return _web(home, args)
-    if args.command == "decisions":
+    if args.command in ("decisions", "spend") or (
+        args.command == "draft" and getattr(args, "dry_run", False)
+    ):
         try:
             store = _reader(home / "drafter.sqlite3")
         except StoreError as exc:
             print(safe(exc), file=sys.stderr)
             return 1
         try:
+            if args.command == "spend":
+                return _spend(store)
+            if args.command == "draft":
+                return _draft_dry(store, args)
             return _decisions(store)
         finally:
             store.close()
@@ -216,6 +241,11 @@ def main(argv: list[str] | None = None) -> int:
             return _candidates_list(store, args) if args.action == "list" else _status(store)
         finally:
             store.close()
+    if args.command == "draft":
+        # No run lock: a draft writes only its own spending rows, each with the caps
+        # checked in the same transaction, so the hourly run isn't held up for the
+        # minute or two the AI takes (and a draft isn't turned away by it).
+        return _draft_unlocked(home, args)
     try:
         lock = _lock(home)
     except Locked:
@@ -442,6 +472,140 @@ def _web(home: Path, args) -> int:
         pass
     finally:
         server.server_close()
+    return 0
+
+
+def _draft_cves(args) -> list[str] | None:
+    cves = sorted({c.strip().upper() for c in args.cves})
+    bad = [c for c in cves if not CVE_ID.match(c)]
+    if bad:
+        print(f"not CVE numbers: {safe(', '.join(bad))}", file=sys.stderr)
+        return None
+    return cves
+
+
+def _draft_dry(store: Store, args) -> int:
+    from drafter import draft
+
+    cves = _draft_cves(args)
+    if cves is None:
+        return 2
+    try:
+        decision = draft.approved(store, cves)
+    except draft.DraftError as exc:
+        print(safe(exc), file=sys.stderr)
+        return 1
+    found = draft.sources(store, list(decision.cves))
+    messages = [{"role": "user", "content": draft.user_message(list(decision.cves), found)}]
+    tokens = draft.estimate(draft.SYSTEM, messages)
+    print(f"approved {decision.decided_at[:10]}: {', '.join(decision.cves)}")
+    for s in found:
+        print(safe(f"  source: {s.name} ({len(s.text)} characters, fetch {s.fetch_id})"))
+    print(
+        f"about {tokens} tokens in, by the rough estimate; at most"
+        f" ${draft.worst_cost(tokens):.2f} for the first request (cap ${draft.PER_DRAFT_CAP:.2f}"
+        f" a draft); ${draft.spent(store):.2f} spent of ${draft.TOTAL_CAP:.2f}. Nothing sent."
+    )
+    problem = None if found else "nothing fetched about these CVEs to draft from"
+    try:
+        draft.allow(store, draft.worst_cost(tokens), 0.0, args.past_tell_mark)
+    except draft.DraftError as exc:
+        problem = str(exc)
+    if problem:
+        print(safe(f"a real run would stop: {problem}"), file=sys.stderr)
+        return 1
+    return 0
+
+
+def _draft_unlocked(home: Path, args) -> int:
+    cves = _draft_cves(args)
+    if cves is None:
+        return 2
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        # Checked before anything is recorded: a request that can't be sent costs
+        # nothing and mustn't count.
+        print(
+            'no API key: ANTHROPIC_API_KEY=$(op read "op://Personal/Anthropic API Key/notesPlain")'
+            " drafter draft …",
+            file=sys.stderr,
+        )
+        return 2
+    if args.out is not None and (
+        not args.out.parent.is_dir()
+        or args.out.is_dir()
+        or not os.access(args.out if args.out.exists() else args.out.parent, os.W_OK)
+    ):
+        print(f"--out: can't write a file at {safe(args.out)}", file=sys.stderr)
+        return 2
+    try:
+        store = Store(home / "drafter.sqlite3")
+    except (StoreError, sqlite3.Error) as exc:
+        print(safe(exc), file=sys.stderr)
+        return 1
+    try:
+        # Unlocked, so it waits for the hourly run's writes rather than failing
+        # after an answer has been paid for. (A fill owed after a schema move is
+        # left to the hourly run and the page, which hold their own.)
+        store.db.execute("PRAGMA busy_timeout = 120000")
+        return _draft(store, args, cves)
+    finally:
+        store.close()
+
+
+def _draft(store: Store, args, cves: list[str]) -> int:
+    import anthropic
+
+    from drafter import draft
+
+    client = anthropic.Anthropic(max_retries=0)
+    try:
+        made = draft.draft(
+            store,
+            cves,
+            client,
+            past_tell=args.past_tell_mark,
+        )
+    except draft.DraftError as exc:
+        print(safe(exc), file=sys.stderr)
+        return 1
+    text = draft.render(made, timeutil.fmt(timeutil.now())[:16].replace("T", " ") + " UTC")
+    written = False
+    if args.out:
+        try:
+            args.out.write_text(text, encoding="utf-8")
+            written = True
+            print(f"draft written to {safe(args.out)}")
+        except OSError as exc:
+            print(f"--out couldn't be written ({safe(exc)}): here it is", file=sys.stderr)
+    if not written:
+        print(safe_lines(text))
+    print(
+        f"this draft: ${made.cost:.4f}; spent ${draft.spent(store):.2f} of ${draft.TOTAL_CAP:.2f}"
+    )
+    if not made.ok:
+        print("NOT USABLE: the answer was refused (the reasons are in the draft)", file=sys.stderr)
+        return 1
+    return 0
+
+
+def _spend(store: Store) -> int:
+    from drafter import draft
+
+    rows = draft.ledger(store)
+    for r in rows:
+        state = "" if r["settled"] else "  (never settled: counted at its most)"
+        print(
+            safe(
+                f"{r['sent_at'][:16].replace('T', ' ')}  {', '.join(json.loads(r['cves']))}"
+                f"  try {r['attempt']}  {r['stop_reason'] or '?'}  ${r['cost']:.4f}"
+                f"  {r['request_id'] or ''}{state}"
+            )
+        )
+    total = draft.spent(store)
+    print(
+        f"spent ${total:.2f} of ${draft.TOTAL_CAP:.2f}; at most ${draft.PER_DRAFT_CAP:.2f} a"
+        f" draft; John is told at ${draft.TELL_AT:.2f} ({draft.MODEL}, D6)"
+    )
     return 0
 
 

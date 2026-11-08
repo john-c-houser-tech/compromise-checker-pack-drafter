@@ -1,6 +1,6 @@
 # Pack application build plan — 2026-10-31
 
-> **Status: 2026-11-08.** Stage 1 (A.1–A.3) built; at the stop John chose to go on as far as A.4; A.4b (cards that say enough to decide on) approved 2026-11-08. D1–D4 and D7 settled; D5 and D6 wait for A.5 and A.8.
+> **Status: 2026-11-08.** Stage 1 (A.1–A.3) built; A.4 and A.4b (the decision page) built; A.5 (AI drafts) going ahead. D1–D4, D6 and D7 settled; D5 waits for A.8.
 > Starts from the outline agreed on 2026-10-30, in Compromise Checker's
 > `plans/phase4-build-plan-2026-10-30.md`, "After Phase 4: the pack application".
 
@@ -132,7 +132,8 @@ written into `docs/web.md`.
 **A.5 Drafting.** For an approved threat only: title, mitigations, detections and
 remediation, from the fetched advisories. Answers are validated, retries bounded,
 the cost recorded per draft and held to a cap (D6). Detections may only use what
-the format allows.
+the format allows. *Go-ahead: John, 2026-11-08; built as `drafter draft`
+([`docs/draft.md`](../docs/draft.md)).*
 
 **A.6 Text checks.** Refuse references that weren't among the fetched sources.
 Flag commands, addresses and URLs in prose that no source contains. Test with
@@ -196,8 +197,10 @@ first new threat for real, through review, proof and John's signature.
   *Recommended: a general one (install the last vulnerable and the first fixed
   build on one image per family, and check the verdicts), about a cent a run; each
   run still with John's OK, under a Linode cap of $10 for this plan.*
-- **D6. AI budget?** *Recommended: a per-draft cap and a total cap for the plan,
-  both set at A.5 from a measured draft, with the model chosen then.*
+- **D6. AI budget? DECIDED (John, 2026-11-08):** Claude Opus 5.5; at most $0.50 a
+  draft and $10 for the plan, stopping to tell John at $5. Measured first on one
+  brotli draft from the same input: Opus 5.5 $0.093, Sonnet 5.5 $0.044; Opus the more
+  accurate (Sonnet gave NVD's score to CISA and cited another CVE's page).
 - **D7. Where does it run? DECIDED (John, 2026-11-07), for now:** on the laptop,
   a systemd user timer about hourly, each feed read from a saved position so a
   closed laptop only delays it; no public login page. Reconsider if the tool gets
