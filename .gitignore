@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.egg-info/
+.venv/
+.pytest_cache/
+.ruff_cache/
+build/
+dist/
+
+# Local state: fetched feeds, candidates, drafts
+/var/
+*.sqlite3
+*.db
+
+# Keys never belong here: the drafter holds no signing key or token
+*.key
+.env

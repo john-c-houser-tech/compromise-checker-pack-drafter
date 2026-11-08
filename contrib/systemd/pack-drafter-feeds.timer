@@ -1,0 +1,11 @@
+[Unit]
+Description=Read the pack drafter's feeds about every hour
+
+[Timer]
+OnCalendar=hourly
+RandomizedDelaySec=10min
+# A run missed while the laptop was shut happens when it wakes (plan D7).
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,68 @@
+# Threats set aside from the candidate list (plan D3, decided 2026-11-07).
+#
+# Every package on a release Compromise Checker supports counts as a candidate,
+# except what this file names. Set-aside threats still show in the list, under
+# their own heading with the reason given here. John approves every change.
+#
+# [[package]]  name: a package name or glob (* and ?), matched against Ubuntu
+#              source and Red Hat package names.
+# [[product]]  cpe: a Red Hat product's CPE name or glob, the part after
+#              "cpe:/a:redhat:" or "cpe:/o:redhat:", up to the next colon.
+
+[[package]]
+name = "webkit2gtk*"
+reason = "desktop browser engine, not part of a server the tool checks"
+added = 2026-11-07
+
+[[package]]
+name = "firefox*"
+reason = "desktop web browser"
+added = 2026-11-07
+
+[[package]]
+name = "thunderbird*"
+reason = "desktop mail client"
+added = 2026-11-07
+
+[[package]]
+name = "chromium*"
+reason = "desktop web browser"
+added = 2026-11-07
+
+[[package]]
+name = "qtwebkit*"
+reason = "desktop web engine, not part of a server the tool checks"
+added = 2026-11-07
+
+[[package]]
+name = "wpewebkit*"
+reason = "embedded web engine for kiosks and devices, not part of a server the tool checks"
+added = 2026-11-07
+
+[[product]]
+cpe = "ansible_automation_platform*"
+reason = "Ansible Automation Platform, an add-on product the tool doesn't judge"
+added = 2026-11-07
+
+[[product]]
+cpe = "satellite"
+reason = "Red Hat Satellite's own server, an add-on product the tool doesn't judge"
+added = 2026-11-07
+
+[[product]]
+cpe = "satellite_capsule"
+reason = "Red Hat Satellite's Capsule server, an add-on product the tool doesn't judge"
+added = 2026-11-07
+
+[[product]]
+cpe = "rhel_satellite*"
+reason = "packages Red Hat ships for Satellite's servers, an add-on the tool doesn't judge"
+added = 2026-11-07
+
+# Not set aside: satellite_client, the agent packages Satellite installs on
+# ordinary RHEL hosts, which the tool does judge.
+
+[[product]]
+cpe = "openshift*"
+reason = "OpenShift, whose parts are container images, not packages on a host the tool checks"
+added = 2026-11-07

@@ -1,0 +1,21 @@
+# Reads the public feeds once, then the vendor records for new candidates.
+# Started by pack-drafter-feeds.timer.
+# Install: see docs/feeds.md, "Running it every hour".
+[Unit]
+Description=Compromise Checker pack drafter: read the public feeds
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+# Optional: NVD_API_KEY=... (a free NVD key makes NVD reads about ten times faster)
+EnvironmentFile=-%h/.config/pack-drafter/env
+# Its own install, not a working checkout, so work on a branch never changes
+# what runs every hour (docs/feeds.md, "Running it every hour").
+# "-": a feed failing (it says so in `drafter feeds status`) must not stop the
+# next line; without it systemd skips the rest of a oneshot's ExecStart lines.
+ExecStart=-%h/.local/share/pack-drafter/venv/bin/drafter feeds fetch
+# Then the vendors' records for signalled CVEs (A.2).
+ExecStart=%h/.local/share/pack-drafter/venv/bin/drafter candidates refresh
+Nice=10
+IOSchedulingClass=idle

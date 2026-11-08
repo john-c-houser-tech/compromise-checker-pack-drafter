@@ -1,0 +1,28 @@
+# Upstream products that third-party repositories rebuild (plan D4, extended to
+# the candidate list on 2026-11-07).
+#
+# Ubuntu's and Red Hat's records can't say whether a third-party build is
+# affected: a bug only in PHP 8.4 has no affected Ubuntu 24.04 package, yet
+# Sury's php8.4 is. So a sign of exploitation on a product named here is listed
+# under "Third-party builds", with its CVE numbers, whatever the vendors say.
+# Whether each build is affected is settled at fill-in (A.3), by a person
+# confirming, never by the drafter alone. John approves every change.
+#
+# cpe: the vendor:product NVD gives in its CPE names (a glob: * and ?).
+# words: words in NVD's description that also count, matched whole and with
+#        their case, for the days before NVD names the products. A false match
+#        only adds a line for a person to read; it never hides anything.
+
+[[watch]]
+cpe = "php:php"
+words = ["PHP"]
+repositories = ["Sury (ppa:ondrej/php) on Ubuntu", "Remi on RHEL, Rocky Linux and AlmaLinux"]
+added = 2026-11-07
+
+# Where `drafter propose` (A.3b) reads each repository's builds.
+[watch.sury]
+ppa = "ondrej/php"
+sources = "php?.?"
+[watch.remi]
+repositories = ["safe", "modular"]  # phpNN-php-* collections, and php:remi-N.N modules
+packages = ["php", "php-*", "php??-php", "php??-php-*"]
