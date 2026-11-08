@@ -1,6 +1,6 @@
 """A.4: the candidate page, for approving or rejecting each threat with a reason.
 
-    drafter web [--port 8089] [--origin https://packs.localhost:8443]
+    drafter web [--port 8089] [--origin https://packs.localhost:8443] [--packs DIR]
 
 One person on one laptop (plan D7): it listens on 127.0.0.1 only, behind Caddy at
 https://packs.localhost:8443, and has no login. Any site open in the same browser
@@ -28,7 +28,7 @@ from pathlib import Path
 
 import jinja2
 
-from drafter import __version__, candidates, decisions, timeutil
+from drafter import __version__, candidates, cards, decisions, packs, timeutil, upgrade
 from drafter.status import needing_a_look
 from drafter.store import Store, StoreError
 
@@ -80,6 +80,7 @@ class Site:
     origin: str = DEFAULT_ORIGIN
     days: int = 30
     by: str = field(default_factory=getpass.getuser)
+    packs: Path | None = None  # a local clone of compromise-checker-packs (A.4b)
     token: str = field(default_factory=lambda: secrets.token_urlsafe(32))
     now: Callable[[], dt.datetime] = timeutil.now
 
@@ -118,6 +119,8 @@ def _card(
     by_cve: dict[str, decisions.Decision],
     listed: set[str],
     older: bool,
+    known: dict[str, cards.Facts],
+    signed: list[packs.Pack],
 ) -> dict:
     cands = threat.candidates
     via, repos = [], []
@@ -128,6 +131,10 @@ def _card(
         {p for cand in cands for p in cand.products}
         | {f"CISA: {cand.kev_name}" for cand in cands if cand.kev_name}
     )
+    packages = [p for c in cands for p in c.packages]
+    attacks = cards.attacks(threat, known)
+    cover = packs.covers(signed, [c.cve for c in cands])
+    st = decisions.state(threat, by_cve, listed)
     return {
         "anchor": anchor(threat),
         "kind": threat.kind,
@@ -136,14 +143,25 @@ def _card(
         "families": ",".join(threat.families),
         "cves": sorted(c.cve for c in cands),
         "signals": sorted({s.describe() for c in cands for s in c.signals}),
-        "packages": candidates._releases([p for c in cands for p in c.packages]),
+        "packages": candidates._releases(packages),
         "matched": via,
         "named": named,
         "repos": repos,
         "reasons": sorted({r for c in cands for r in c.reasons}),
         "decidable": threat.kind in decisions.DECIDABLE,
-        "state": decisions.state(threat, by_cve, listed),
+        "state": st,
         "older": older,
+        "attacks": attacks,
+        "what": cards.what(threat, known),
+        "reach": cards.reach(threat, known),
+        "ratings": cards.ratings(threat, attacks["word"] == "exploited"),
+        "fix": cards.fix(packages) if threat.kind == "judge" else None,
+        "words": cards.words(threat, known),
+        "covers": cover,
+        "signs": decisions.shown_signs(threat),
+        # Covered folds the form away only while nobody has decided it: a decision,
+        # or a reason to look again, is shown as for any other threat.
+        "covered": st.word == "undecided" and bool(cover) and cover[0].full,
     }
 
 
@@ -161,25 +179,33 @@ def view(site: Site, store: Store) -> dict:
     # stay (marked) until someone decides them, instead of dropping off unseen; a
     # CVE ever decided is settled once it leaves the window, so ageing alone never
     # reopens a decision.
+    # A reject that has had a sign of attacks since comes back too (A.4b), whatever
+    # its age.
     in_window = {c.cve for c in found}
     wide = timeutil.fmt(max(now - max(OPEN_FOR, dt.timedelta(days=site.days)), OPEN_SINCE))
     before = [
         c
         for c in candidates.classify(store, wide, now=now)
-        if c.cve not in in_window and c.cve not in by_cve
+        if c.cve not in in_window
+        and (
+            c.cve not in by_cve
+            or decisions.attacked_since(by_cve[c.cve], candidates.Threat(c.kind, [], [c]))
+        )
     ]
     earlier = [g for g in candidates.threats(before) if g.kind in decisions.DECIDABLE]
     # As the command-line list counts it: the window's CVEs only.
     listed = {c.cve for g in recent for c in g.candidates}
+    known = cards.facts(store, [c.cve for g in recent + earlier for c in g.candidates])
+    signed, packs_note = _signed(site)
     shown: list[candidates.Threat] = []  # the threats with a form on the page
     sections = []
     for kind, title, blurb in SECTIONS:
-        cards = []
+        built = []
         for group, older in [(g, False) for g in recent] + [(g, True) for g in earlier]:
             if group.kind != kind:
                 continue
-            card = _card(group, by_cve, listed, older)
-            cards.append(card)
+            card = _card(group, by_cve, listed, older, known, signed)
+            built.append(card)
             if card["decidable"]:
                 shown.append(group)
         sections.append(
@@ -187,24 +213,42 @@ def view(site: Site, store: Store) -> dict:
                 "kind": kind,
                 "title": title,
                 "blurb": blurb,
-                "cards": cards,
-                "cves": sum(len(c["cves"]) for c in cards),
-                "open": sum(1 for c in cards if c["decidable"] and c["state"].open),
+                "cards": built,
+                "cves": sum(len(c["cves"]) for c in built),
+                # Covered threats aren't counted as still to decide.
+                "open": sum(
+                    1 for c in built if c["decidable"] and c["state"].open and not c["covered"]
+                ),
             }
         )
     return {
         "since": since[:10],
         "days": site.days,
         "notes": needing_a_look(store, now),
+        "packs_note": packs_note,
         "sections": sections,
         "unnamed": [c for c in found if c.kind == "unnamed"],
         "elsewhere": sum(1 for c in found if c.kind == "elsewhere"),
         "unread": [c.cve for c in found if c.kind == "unread"],
-        "older": sum(1 for s in sections for card in s["cards"] if card["older"]),
+        "older": sum(
+            1 for s in sections for card in s["cards"] if card["older"] and not card["covered"]
+        ),
         "history": decided,
         "groups": recent + earlier,
         "shown": shown,
     }
+
+
+def _signed(site: Site) -> tuple[list[packs.Pack], str | None]:
+    """The signed packs, and what to say if they couldn't be read (then none count)."""
+    if site.packs is None:
+        return [], None
+    try:
+        return packs.load(site.packs), None
+    except packs.PackError as exc:
+        return [], f"{exc} (in {site.packs})"
+    except OSError as exc:  # the clone gone, or unreadable
+        return [], f"{type(exc).__name__} (in {site.packs})"
 
 
 def page(site: Site, data: dict, *, error: str | None = None, kept: dict | None = None) -> str:
@@ -217,14 +261,23 @@ def page(site: Site, data: dict, *, error: str | None = None, kept: dict | None 
     )
 
 
-def find(groups: list[candidates.Threat], kind: str, cves: list[str], families: list[str]):
-    """The threat the form was for, if it is still just as the page showed it."""
+def find(
+    groups: list[candidates.Threat],
+    kind: str,
+    cves: list[str],
+    families: list[str],
+    signs: str,
+):
+    """The threat the form was for, if it is still just as the page showed it,
+    signs of attacks included: a reject keeps the signs it was made with, so one
+    sent from a page that didn't show a new sign would bury it."""
     wanted = sorted(cves)
     for group in groups:
         if (
             group.kind == kind
             and sorted(c.cve for c in group.candidates) == wanted
             and list(group.families) == families
+            and decisions.shown_signs(group) == signs
         ):
             return group
     return None
@@ -355,6 +408,7 @@ class Handler(BaseHTTPRequestHandler):
             "kind",
             "cves",
             "families",
+            "signs",
             "verdict",
             "reason",
         } <= set(fields):
@@ -383,7 +437,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             cves = [c for c in fields["cves"].split(",") if c]
             families = [f for f in fields["families"].split(",") if f]
-            threat = find(data["groups"], fields["kind"], cves, families)
+            threat = find(data["groups"], fields["kind"], cves, families, fields["signs"])
             # Back in the box of a threat that has one, whatever happened to the CVEs.
             kept = {"anchor": nearest(data["shown"], cves), "reason": fields["reason"]}
             if threat is None:
@@ -393,8 +447,8 @@ class Handler(BaseHTTPRequestHandler):
                         self.site,
                         data,
                         error="That threat changed since the page loaded (a CVE joined or"
-                        " left it, its packages changed, or it moved section). Look at it"
-                        " again below; "
+                        " left it, its packages changed, it moved section, or attacks were"
+                        " reported). Look at it again below; "
                         + (
                             "your reason is kept in its box."
                             if kept["anchor"]
@@ -415,9 +469,16 @@ class Handler(BaseHTTPRequestHandler):
                     timeutil.fmt(self.site.now()),
                 )
             except decisions.DecisionError as exc:
+                name = ", ".join(threat.families) or "?"
                 self._html(
                     HTTPStatus.BAD_REQUEST,
-                    page(self.site, data, error=str(exc), kept=kept),
+                    page(
+                        self.site,
+                        data,
+                        error=f"Not recorded for {name} ({', '.join(cves)}): {exc}."
+                        " Its box is open below.",
+                        kept=kept,
+                    ),
                 )
                 return
             except sqlite3.OperationalError as exc:
@@ -463,7 +524,14 @@ class Server(ThreadingHTTPServer):
 
 
 def make_server(site: Site) -> Server:
-    # The store is upgraded here, once, rather than by the first page load.
-    Store(site.store_path).close()
+    # The store is upgraded here, once, rather than by the first page load, and
+    # its new columns filled from the pages already kept.
+    store = Store(site.store_path)
+    try:
+        filled = upgrade.fill(store)
+        if filled:
+            log.warning("%s", filled)
+    finally:
+        store.close()
     handler = type("SiteHandler", (Handler,), {"site": site})
     return Server(("127.0.0.1", site.port), handler)

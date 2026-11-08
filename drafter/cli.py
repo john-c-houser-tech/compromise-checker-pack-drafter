@@ -5,7 +5,7 @@
     drafter feeds status
     drafter candidates refresh|list|add …
     drafter fill CVE … / drafter propose CVE …
-    drafter web [--port N] [--origin URL]
+    drafter web [--port N] [--origin URL] [--packs DIR]
     drafter decisions
 
 Exit codes: 0 fine, 1 a feed failed or needs a look, 2 bad usage, 3 another run
@@ -26,7 +26,7 @@ import unicodedata
 import urllib.parse
 from pathlib import Path
 
-from drafter import __version__, candidates, decisions, fill, thirdparty, timeutil
+from drafter import __version__, candidates, decisions, fill, thirdparty, timeutil, upgrade
 from drafter.feeds import CVE_ID, Context, all_feeds, by_name, nvd, run_feeds, run_one, seed_feed
 from drafter.feeds.osv import Osv
 from drafter.http import Fetcher
@@ -160,6 +160,12 @@ def _parser() -> argparse.ArgumentParser:
         help="the address the browser uses, through Caddy (default: %(default)s)",
     )
     web.add_argument(
+        "--packs",
+        type=Path,
+        help="a local clone of compromise-checker-packs: threats its signed packs name"
+        " read Covered",
+    )
+    web.add_argument(
         "--days", type=int, default=30, help="signalled in the last N days (default: %(default)s)"
     )
     commands.add_parser("decisions", help="every approve and reject, newest first (A.4)")
@@ -216,11 +222,9 @@ def main(argv: list[str] | None = None) -> int:
         print("another drafter run is going; try again when it ends", file=sys.stderr)
         return 3
     store = Store(home / "drafter.sqlite3")
-    if store.migrated_from == 1:
-        # Schema 2 keeps NVD's product names and descriptions; fill them for the
-        # CVEs already stored, from the pages already kept (no fetching).
-        filled = nvd.reparse_products(store)
-        print(f"store upgraded to schema 2: NVD product names filled for {filled} CVE(s)")
+    filled = upgrade.fill(store)  # the new columns, from the pages already kept
+    if filled:
+        print(filled)
     try:
         ctx = Context(
             store=store,
@@ -421,7 +425,10 @@ def _web(home: Path, args) -> int:
     if not 0 < args.port < 65536 or not 0 < args.days <= 3650:
         print("--port is 1 to 65535 and --days 1 to 3650", file=sys.stderr)
         return 2
-    site = web.Site(home=home, port=args.port, origin=origin, days=args.days)
+    if args.packs is not None and not (args.packs / "index.yaml").is_file():
+        print(f"--packs: no index.yaml in {safe(args.packs)}", file=sys.stderr)
+        return 2
+    site = web.Site(home=home, port=args.port, origin=origin, days=args.days, packs=args.packs)
     try:
         server = web.make_server(site)
     except (StoreError, OSError, sqlite3.Error) as exc:
@@ -447,7 +454,7 @@ def _decisions(store: Store) -> int:
         print(
             safe(
                 f"{d.decided_at[:16].replace('T', ' ')}  {verdict}  {', '.join(d.families) or '?'}"
-                f"  {', '.join(d.cves)}  by {d.decided_by}: {d.reason}"
+                f"  {', '.join(d.cves)}  by {d.decided_by}: {d.reason or '(no reason given)'}"
             )
         )
     return 0

@@ -231,3 +231,24 @@ th, td {
 th { font-size: 0.85rem; color: var(--quiet); }
 td { overflow-wrap: anywhere; }
 .nowrap { white-space: nowrap; }
+
+/* A.4b: what each card says. Exploited is ink, not red: red and amber stay for
+   rejected and look again. */
+.pill-exploited { color: var(--sheet); background: var(--ink); border-color: var(--ink); }
+.pill-hand { color: var(--ink); }
+.pill-nosign { color: var(--quiet); }
+.pill-covered { color: var(--quiet); }
+.card-covered { border-left-color: var(--rule); }
+.what { display: grid; gap: 2px; }
+.what .id { color: var(--quiet); font-size: 0.85rem; margin-right: 6px; }
+.words { margin-top: 8px; border-top: 1px solid var(--rule); padding-top: 8px; }
+.words summary { font-size: 0.92rem; }
+.words blockquote {
+  margin: 8px 0 0;
+  padding: 8px 12px;
+  background: var(--code);
+  border-radius: 10px;
+  font-size: 0.92rem;
+  overflow-wrap: anywhere;
+}
+.words cite { display: block; font-style: normal; color: var(--quiet); font-size: 0.82rem; }

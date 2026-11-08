@@ -1,6 +1,6 @@
 # Pack application build plan — 2026-10-31
 
-> **Status: 2026-11-07.** Stage 1 (A.1–A.3) built; at the stop John chose to go on as far as A.4. D1–D4 and D7 settled; D5 and D6 wait for A.5 and A.8.
+> **Status: 2026-11-08.** Stage 1 (A.1–A.3) built; at the stop John chose to go on as far as A.4; A.4b (cards that say enough to decide on) approved 2026-11-08. D1–D4 and D7 settled; D5 and D6 wait for A.5 and A.8.
 > Starts from the outline agreed on 2026-10-30, in Compromise Checker's
 > `plans/phase4-build-plan-2026-10-30.md`, "After Phase 4: the pack application".
 
@@ -120,6 +120,14 @@ confirm).
 **A.4 Web interface.** A small server-rendered page at
 `https://packs.localhost:8443`: candidates, approve or reject with a reason, in an
 append-only record.
+
+*A.4b (John, 2026-11-08):* the first cards gave no basis to decide on (one titled
+"ruby" was a GitLab flaw; four of seven had CISA saying "no exploitation"), and a
+reason was asked for the wrong way round. Approved as proposed: a reason only to
+reject; each card says whether it's attacked, what it is, who can reach it and
+whether there's a fix, from data already fetched; threats a signed pack names read
+Covered; a reject comes back if attacks are reported after it; the approve tests
+written into `docs/web.md`.
 
 **A.5 Drafting.** For an approved threat only: title, mitigations, detections and
 remediation, from the fetched advisories. Answers are validated, retries bounded,
