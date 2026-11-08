@@ -116,8 +116,7 @@ def _urls(value: object) -> frozenset[str]:
     found: set[str] = set()
     if isinstance(value, str):
         for url in _URL.findall(value):
-            found.add(url)
-            found.add(url.rstrip(".,;:)]?!"))
+            found |= textcheck.url_forms(url)
     elif isinstance(value, dict):
         for item in value.values():
             found |= _urls(item)
@@ -354,7 +353,7 @@ _EXPOSURE = {
         }  # fmt: skip
     ],
 }
-_URL = re.compile(r"https?://[^\s\"'<>`\u201c\u201d\u2018\u2019]+")
+_URL = textcheck._URL  # one rule for the sources' addresses and the prose's
 # A version: three numbers, however written (1.2.1, v1.2.1, 1.2.1rc1), but not a
 # four-number address (127.0.0.1); a version pattern (1.2.*, 8.0.x); or a vendor build
 # (1.0.9-2ubuntu0.1, 3.8-1.el9).
@@ -476,12 +475,13 @@ def _text_checks(out: Checked, answer: dict, found: list[Source], known: frozens
         lit = finding.literal
         given_by = finding.sources
         if lit.kind == "URL":
-            address = html.unescape(lit.text)
-            given_by = tuple(s.name for s in found if address in s.urls)
+            forms = textcheck.url_forms(html.unescape(lit.text))
+            given_by = tuple(s.name for s in found if forms & s.urls)
         if not given_by:
             made_up += 1
             if made_up <= 20:
-                out.problems.append(f"a {lit.kind} no source gives: {lit.text[:120]}")
+                article = "an" if lit.kind == "address" else "a"
+                out.problems.append(f"{article} {lit.kind} no source gives: {lit.text[:120]}")
         else:
             where = f" ({finding.context!r})" if finding.context and lit.kind != "URL" else ""
             out.notes.append(f"{lit.kind} {lit.text!r}: from {'; '.join(given_by)}{where}")
@@ -490,7 +490,9 @@ def _text_checks(out: Checked, answer: dict, found: list[Source], known: frozens
     for m in out.mitigations:
         setting = m.get("setting") if isinstance(m, dict) else None
         name = setting.get("name") if isinstance(setting, dict) else None
-        if isinstance(name, str) and name.lower() not in said:
+        if isinstance(name, str) and not re.search(
+            rf"(?<![\w.-]){re.escape(name.lower())}(?![\w-]|\.\w)", said
+        ):
             out.problems.append(f"a setting no source gives: {name}")
     # References are all from the sources already (above): only those on a site that
     # isn't a usual advisory publisher are worth a second look.

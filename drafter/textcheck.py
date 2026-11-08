@@ -47,74 +47,41 @@ _COMMAND = re.compile(
     re.IGNORECASE,
 )
 # Clearly code, however it is worded.
-_SHELLISH = re.compile(r"`[^`\n]{2,}`|\$\([^)\n]+\)|(?:^|\s)\$\s+\S[^\n]*")
+_SHELLISH = re.compile(r"`[^`\n]{2,300}`|\$\([^)\n]{1,300}\)|(?:^|\s)\$[ \t]+\S[^\n]{0,300}")
 # Each bounded, so a long or hostile answer can't make one slow (no unbounded run
-# before a later part of the pattern), and each within one line.
+# before a later part of the pattern), and each within one line. Negated advice
+# ("never set SELINUX=disabled") is refused too: skipping it would let "don't
+# hesitate to run …" through; the model rewords on its second try.
 _DANGER = (
-    (
-        re.compile(r"\|[ \t]*(?:sudo[ \t]+)?(?:ba|z|da|k)?sh\b", re.I),
-        "a download piped into a shell",
-    ),
-    (
-        re.compile(r"\b(?:curl|wget)\b[^\n|]{0,300}\|", re.I),
-        "a download piped into another program",
-    ),
-    (
-        re.compile(
-            r"<\([ \t]*(?:curl|wget)\b|\b(?:curl|wget)\b[^\n]{0,300}(?:&&|;)[ \t]*"
-            r"(?:sudo[ \t]+)?(?:ba|z|da|k)?sh[ \t]",
-            re.I,
-        ),
-        "a download run by a shell",
-    ),  # fmt: skip
+    (re.compile(r"\|[ \t]*(?:sudo[ \t]+(?:-\w+[ \t]+)*)?(?:ba|z|da|k)?sh\b", re.I),
+     "a download piped into a shell"),
+    (re.compile(r"\b(?:curl|wget)\b[^\n|]{0,300}\|(?![ \t]*(?:grep|head|tail|less|more|wc|jq)\b)",
+                re.I), "a download piped into another program"),
+    (re.compile(r"<\([ \t]*(?:curl|wget)\b|\b(?:curl|wget)\b[^\n]{0,300}(?:&&|;)[ \t]*"
+                r"(?:sudo[ \t]+)?(?:ba|z|da|k)?sh[ \t]", re.I), "a download run by a shell"),
     (re.compile(r"https?://\d{1,3}(?:\.\d{1,3}){3}", re.I), "a download from a bare IP address"),
-    (re.compile(r"\b(?:curl|wget)\b[^\n]{0,300}\bhttp://", re.I), "a download over plain HTTP"),
+    (re.compile(r"\b(?:curl|wget)(?:[ \t]+-{1,2}[\w-]{1,30}(?:[ \t]+[^\s-][^\s]{0,80})?){0,6}"
+                r"[ \t]+[\"']?http://", re.I), "a download over plain HTTP"),
     (re.compile(r"\bbase64[ \t]+(?:-d|--decode)\b", re.I), "base64-decoded code"),
     (re.compile(r"/dev/(?:tcp|udp)/", re.I), "a /dev/tcp connection"),
-    (re.compile(r"\b(?:bash|sh|zsh)[ \t]+-c\b", re.I), "a shell given a command string"),
-    (
-        re.compile(r"\bnc(?:at)?(?:[ \t]+[^\s]{1,80}){0,8}?[ \t]+-[ce]\b", re.I),
-        "netcat running a program",
-    ),  # fmt: skip
-    (
-        re.compile(
-            r"\brm(?:[ \t]+-{1,2}[\w-]{1,30}){1,6}[ \t]+(?:--no-preserve-root[ \t]+)?"
-            r"/\*?(?=\s|$)",
-            re.I,
-        ),
-        "deleting from the root",
-    ),  # fmt: skip
-    (
-        re.compile(r"\bchmod[ \t]+(?:[ugoa]{0,4}\+[rw]{0,2}x|[0-7]{0,1}[0-7]?7[0-7]{2})\b", re.I),
-        "making a file executable",
-    ),  # fmt: skip
-    (re.compile(r"\beval[ \t]*[$(\"'`]", re.I), "evaluating code"),
-    (
-        re.compile(
-            r"\bsetenforce[ \t]+(?:0|permissive)\b|SELINUX[ \t]*=[ \t]*(?:disabled|permissive)",
-            re.I,
-        ),
-        "turning SELinux off",
-    ),  # fmt: skip
-    (
-        re.compile(
-            r"\bsystemctl[ \t]+(?:stop|disable|mask|kill)[ \t]+(?:--now[ \t]+)?(?:firewalld|ufw"
-            r"|nftables|iptables|auditd|apparmor|fail2ban|rsyslog|systemd-journald|selinux\w*)",
-            re.I,
-        ),
-        "stopping a firewall, audit or logging service",
-    ),
-    (
-        re.compile(
-            r"\bufw[ \t]+disable\b|\bip6?tables[ \t]+(?:-F|--flush|-P[ \t]+\w+[ \t]+ACCEPT)\b"
-            r"|\bnft[ \t]+flush\b",
-            re.I,
-        ),
-        "dropping the firewall's rules",
-    ),  # fmt: skip
+    (re.compile(r"\bn(?:c|cat|etcat)(?:[ \t]+(?!(?:and|or|then|with|grep)\b)[^\s;|&]{1,80}){0,8}?"
+                r"[ \t]+(?:-[ce]\b|--(?:sh-)?exec\b)", re.I), "netcat running a program"),
+    (re.compile(r"\brm(?:[ \t]+-{1,2}[\w-]{1,30}){1,6}[ \t]+(?:--no-preserve-root[ \t]+)?"
+                r"[\"']?/\*?[\"']?(?![\w/*-]|\.\w)", re.I), "deleting from the root"),
+    (re.compile(r"\bchmod(?:[ \t]+-{1,2}[\w-]{1,20}){0,3}[ \t]+(?:[ugoa]{0,4}\+[rw]{0,2}x\b"
+                r"|0?[0-7]?777\b|0?[0-7]?[0-7][0-7]7\b)", re.I),
+     "making a file executable or writable by anyone"),
+    (re.compile(r"\beval[ \t]*(?:\$|\((?!\))|[\"'`])", re.I), "evaluating code"),
+    (re.compile(r"\bsetenforce[ \t]+(?:0|permissive)\b|SELINUX[ \t]*=[ \t]*(?:disabled|permissive)",
+                re.I), "turning SELinux off"),
+    (re.compile(r"\bsystemctl[ \t]+(?:stop|disable|mask|kill)[ \t]+(?:--now[ \t]+)?(?:firewalld|ufw"
+                r"|nftables|iptables|auditd|apparmor|fail2ban|rsyslog|systemd-journald|selinux\w*)",
+                re.I), "stopping a firewall, audit or logging service"),
+    (re.compile(r"\bufw[ \t]+disable\b|\bip6?tables[ \t]+(?:-F|--flush|-P[ \t]+\w+[ \t]+ACCEPT)\b"
+                r"|\bnft[ \t]+flush\b", re.I), "dropping the firewall's rules"),
     (re.compile(r"\baa-(?:disable|complain|teardown)\b", re.I), "turning AppArmor off"),
-)
-_IPV4 = re.compile(r"(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}(?:/\d{1,2})?(?![\w.])")
+)  # fmt: skip
+_IPV4 = re.compile(r"(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}(?:/\d{1,2})?(?![\w/]|\.\d)")
 _IPV6 = re.compile(r"(?<![\w:])[0-9a-f]{0,4}(?::[0-9a-f]{0,4}){2,7}(?:/\d{1,3})?(?![\w:])", re.I)
 _EMAIL = re.compile(r"(?<![\w.+-])[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
 _TLDS = (
@@ -128,7 +95,16 @@ _HOST = re.compile(
     rf"(?<![\w.@/-])(?:[a-z0-9](?:[a-z0-9-]{{0,61}}[a-z0-9])?\.)+(?:{_TLDS})(?![\w-]|\.[\w-])", re.I
 )
 _PATH = re.compile(r"(?<![\w.:/~-])(?:~/|/)(?:[\w.@+-]+/)*[\w.@+*-]+/?")
-_URL = re.compile(r"https?://[^\s\"'<>`]+", re.I)
+_URL = re.compile(r"https?://[^\s\"'<>`\u201c\u201d\u2018\u2019]+", re.I)
+_URL_END = ".,;:)]?!"
+
+
+def url_forms(url: str) -> set[str]:
+    """A URL as written and without what a sentence puts after it."""
+    url = plain(url)
+    return {url, url.rstrip(_URL_END)}
+
+
 # Sites whose advisories the sources point to as a matter of course.
 KNOWN_SITES = (
     "nvd.nist.gov", "cve.org", "cisa.gov", "redhat.com", "ubuntu.com", "launchpad.net",
@@ -158,7 +134,7 @@ def literals(prose: str) -> list[Literal]:
     seen: set[Literal] = set()
 
     def add(kind: str, text: str) -> None:
-        text = text.strip().rstrip(".,;:)]")
+        text = text.strip().rstrip(_URL_END if kind == "URL" else ".,;:)]")
         lit = Literal(kind, text)
         if text and lit not in seen:
             seen.add(lit)
@@ -210,6 +186,18 @@ class Finding:
     context: str = ""  # the words around it in the first of those, for the signer
 
 
+# What may stand next to a literal in a source for it to count as the source's own,
+# by kind: a command whole; an address also in a URL or with a port or path after it
+# (github.com/org/x, 127.0.0.1:11211, //host); a path also as a directory of a longer
+# one (/etc/modprobe.d of /etc/modprobe.d/x.conf) or with a line number (file.c:12).
+_BOUNDS = {
+    "command": (r"(?<![\w./@:~-])", r"(?![\w/@~-]|[.:][\w/])"),
+    "address": (r"(?<![\w.@-])", r"(?![\w-]|\.\w)"),
+    "path": (r"(?<![\w.~-])", r"(?![\w-]|\.\w)"),
+    "URL": (r"(?<![\w./-])", r"(?![\w/-]|[.:][\w/])"),
+}
+
+
 def _wanted(lit: Literal) -> str:
     text = _norm(lit.text)
     if lit.kind == "command":  # a source's "# systemctl …" is the model's "sudo systemctl …"
@@ -224,9 +212,8 @@ def look_up(found: list[Literal], sources: list[tuple[str, str]]) -> list[Findin
     texts = [(name, _norm(text)) for name, text in sources]
     out = []
     for lit in found:
-        pattern = re.compile(
-            r"(?<![\w./@:~-])" + re.escape(_wanted(lit)) + r"(?![\w/@~-]|[.:][\w/])"
-        )
+        bounds = _BOUNDS[lit.kind]
+        pattern = re.compile(bounds[0] + re.escape(_wanted(lit)) + bounds[1])
         given, context = [], ""
         for name, text in texts:
             match = pattern.search(text)

