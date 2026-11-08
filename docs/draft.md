@@ -77,20 +77,33 @@ telling administrators to run something (`drafter/textcheck.py`):
   backticks; an address: an IPv4 or IPv6 address or range, an email address or a host
   name; a path: one starting with `/` or `~/`). One that **no source contains** was
   made up, and the answer is refused. One a source does contain is listed at the top
-  of the draft, under **CHECK BEFORE SIGNING**, with the sources it came from: being
-  in a source doesn't make it safe.
+  of the draft, under **CHECK BEFORE SIGNING**, with the sources it came from and the
+  source's words around it: being in a source doesn't make it safe. "Contains" means
+  whole: `rm -rf /var` isn't what a source said when it said `rm -rf /var/lib/…`, nor
+  `203.0.113.1` when it said `203.0.113.100`; a URL must be one of the source's
+  addresses exactly. Case, spacing and compatibility forms (full-width letters) don't
+  matter, nor does a `sudo` the model put in front of a source's `# command`, nor the
+  `&gt;` and the like the sources were sent with. At most 20 are refused at a time.
+- **A mitigation's setting** (a `php_ini` name the tool reads on the host) must be
+  one a source names.
 - **Dangerous instructions** are refused wherever they came from, a source included:
-  a download piped into a shell or another program, a download from a bare IP
-  address or over plain HTTP, base64-decoded code, a `/dev/tcp` connection, a shell
-  given a command string, netcat running a program, deleting from the root, making a
-  file executable, evaluating code, turning SELinux or AppArmor off, stopping a
-  firewall, audit or logging service, or dropping the firewall's rules.
+  a download piped into a shell or another program, or run by one (`bash <(curl …)`,
+  `curl … && sh …`), a download from a bare IP address or over plain HTTP,
+  base64-decoded code, a `/dev/tcp` connection, a shell given a command string,
+  netcat running a program, deleting from the root (`rm -rf /`, `/*`), making a file
+  executable, evaluating code, turning SELinux (`setenforce 0`, `SELINUX=disabled`)
+  or AppArmor off, stopping a firewall, audit or logging service, or dropping the
+  firewall's rules (`iptables --flush`, `-P INPUT ACCEPT`).
 - **References** (already held to the sources' addresses) on a site that isn't a
   usual advisory publisher (NVD, CVE, CISA, the distributions, the projects' own
   sites, GitHub and the like) are listed under CHECK BEFORE SIGNING too.
 
 These are heuristics: a phrase missed is caught by the person reviewing, who sees
-every literal the checks found; a phrase wrongly flagged costs one more request. The
+every literal the checks found; a phrase wrongly flagged costs one more request. An
+instruction given in words, or with a command not on the list, isn't caught; nor is
+a reference on a site anyone can publish on (GitHub, GitLab, Launchpad PPAs), which
+counts as a usual one. Each pattern is bounded, so a hostile answer can't make the
+checks slow. The
 six real drafts of 2026-11-08 pass them unchanged; the ruby/GitLab draft lists three
 references on hackerone.com. Tests plant a hostile instruction in each feed (NVD,
 CISA, Red Hat, Ubuntu): it reaches the model only inside its source block, a model

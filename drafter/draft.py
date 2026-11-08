@@ -117,7 +117,7 @@ def _urls(value: object) -> frozenset[str]:
     if isinstance(value, str):
         for url in _URL.findall(value):
             found.add(url)
-            found.add(url.rstrip(".,;:)]"))
+            found.add(url.rstrip(".,;:)]?!"))
     elif isinstance(value, dict):
         for item in value.values():
             found |= _urls(item)
@@ -354,12 +354,12 @@ _EXPOSURE = {
         }  # fmt: skip
     ],
 }
-_URL = re.compile(r"https?://[^\s\"'<>]+")
+_URL = re.compile(r"https?://[^\s\"'<>`\u201c\u201d\u2018\u2019]+")
 # A version: three numbers, however written (1.2.1, v1.2.1, 1.2.1rc1), but not a
 # four-number address (127.0.0.1); a version pattern (1.2.*, 8.0.x); or a vendor build
 # (1.0.9-2ubuntu0.1, 3.8-1.el9).
 _VERSION = re.compile(
-    r"(?<![\d.])\d+\.\d+\.\d+(?!\.\d)"
+    r"(?<![\d.])\d+\.\d+\.\d+(?![\d]|\.\d)"
     r"|(?<![\d.])\d+(?:\.\d+)*\.[*xX](?![\w])"
     r"|\d[\w.+~]*-\d[\w.+~]*(?:ubuntu|deb|el\d)",
     re.IGNORECASE,
@@ -466,10 +466,12 @@ def _prose(answer: dict, mitigations: list, detections: list) -> str:
 
 def _text_checks(out: Checked, answer: dict, found: list[Source], known: frozenset) -> None:
     """A.6: what the prose tells people to run, reach or open, held to the sources."""
-    prose = _prose(answer, out.mitigations, out.detections)
-    for danger in textcheck.dangers(prose):
+    # As the model read the sources: & < > were sent as entities.
+    prose = html.unescape(_prose(answer, out.mitigations, out.detections))
+    for danger in textcheck.dangers(prose)[:20]:
         out.problems.append(f"never in a pack, wherever it came from: {danger}")
     sources = [(s.name, s.said) for s in found]
+    made_up = 0
     for finding in textcheck.look_up(textcheck.literals(prose), sources):
         lit = finding.literal
         given_by = finding.sources
@@ -477,9 +479,19 @@ def _text_checks(out: Checked, answer: dict, found: list[Source], known: frozens
             address = html.unescape(lit.text)
             given_by = tuple(s.name for s in found if address in s.urls)
         if not given_by:
-            out.problems.append(f"a {lit.kind} no source gives: {lit.text}")
+            made_up += 1
+            if made_up <= 20:
+                out.problems.append(f"a {lit.kind} no source gives: {lit.text[:120]}")
         else:
-            out.notes.append(f"{lit.kind} {lit.text!r}: from {'; '.join(given_by)}")
+            where = f" ({finding.context!r})" if finding.context and lit.kind != "URL" else ""
+            out.notes.append(f"{lit.kind} {lit.text!r}: from {'; '.join(given_by)}{where}")
+    # A mitigation's setting is one the tool reads on the host: never made up either.
+    said = "\n".join(textcheck.plain(s.said).lower() for s in found)
+    for m in out.mitigations:
+        setting = m.get("setting") if isinstance(m, dict) else None
+        name = setting.get("name") if isinstance(setting, dict) else None
+        if isinstance(name, str) and name.lower() not in said:
+            out.problems.append(f"a setting no source gives: {name}")
     # References are all from the sources already (above): only those on a site that
     # isn't a usual advisory publisher are worth a second look.
     for url in answer["references"] if isinstance(answer["references"], list) else []:

@@ -23,6 +23,7 @@ every literal the checks found; a phrase wrongly flagged costs one more request.
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
@@ -47,31 +48,70 @@ _COMMAND = re.compile(
 )
 # Clearly code, however it is worded.
 _SHELLISH = re.compile(r"`[^`\n]{2,}`|\$\([^)\n]+\)|(?:^|\s)\$\s+\S[^\n]*")
+# Each bounded, so a long or hostile answer can't make one slow (no unbounded run
+# before a later part of the pattern), and each within one line.
 _DANGER = (
-    (re.compile(r"\|\s*(?:sudo\s+)?(?:ba|z|da|k)?sh\b", re.I), "a download piped into a shell"),
-    (re.compile(r"\b(?:curl|wget)\b[^\n|]*\|", re.I), "a download piped into another program"),
-    (re.compile(r"https?://\d{1,3}(?:\.\d{1,3}){3}", re.I), "a download from a bare IP address"),
-    (re.compile(r"\b(?:curl|wget)\b[^\n]*\bhttp://", re.I), "a download over plain HTTP"),
-    (re.compile(r"\bbase64\s+(?:-d|--decode)\b", re.I), "base64-decoded code"),
-    (re.compile(r"/dev/(?:tcp|udp)/", re.I), "a /dev/tcp connection"),
-    (re.compile(r"\b(?:bash|sh)\s+-c\b", re.I), "a shell given a command string"),
-    (re.compile(r"\bnc(?:at)?\s+(?:\S+\s+)*?-[ce]\b", re.I), "netcat running a program"),
-    (re.compile(r"\brm\s+-\w*r\w*f?\s+/(?:\s|$)", re.I), "deleting from the root"),
-    (re.compile(r"\bchmod\s+(?:\+x|[0-7]*7[0-7]{2})\b", re.I), "making a file executable"),
-    (re.compile(r"\b(?:eval|exec)\s*[(\s]", re.I), "evaluating code"),
-    (re.compile(r"\bsetenforce\s+0\b|\bsetenforce\s+permissive\b", re.I), "turning SELinux off"),
+    (
+        re.compile(r"\|[ \t]*(?:sudo[ \t]+)?(?:ba|z|da|k)?sh\b", re.I),
+        "a download piped into a shell",
+    ),
+    (
+        re.compile(r"\b(?:curl|wget)\b[^\n|]{0,300}\|", re.I),
+        "a download piped into another program",
+    ),
     (
         re.compile(
-            r"\bsystemctl\s+(?:stop|disable|mask|kill)\s+(?:--now\s+)?(?:firewalld|ufw|nftables"
-            r"|iptables|auditd|apparmor|fail2ban|rsyslog|systemd-journald|selinux\w*)",
+            r"<\([ \t]*(?:curl|wget)\b|\b(?:curl|wget)\b[^\n]{0,300}(?:&&|;)[ \t]*"
+            r"(?:sudo[ \t]+)?(?:ba|z|da|k)?sh[ \t]",
+            re.I,
+        ),
+        "a download run by a shell",
+    ),  # fmt: skip
+    (re.compile(r"https?://\d{1,3}(?:\.\d{1,3}){3}", re.I), "a download from a bare IP address"),
+    (re.compile(r"\b(?:curl|wget)\b[^\n]{0,300}\bhttp://", re.I), "a download over plain HTTP"),
+    (re.compile(r"\bbase64[ \t]+(?:-d|--decode)\b", re.I), "base64-decoded code"),
+    (re.compile(r"/dev/(?:tcp|udp)/", re.I), "a /dev/tcp connection"),
+    (re.compile(r"\b(?:bash|sh|zsh)[ \t]+-c\b", re.I), "a shell given a command string"),
+    (
+        re.compile(r"\bnc(?:at)?(?:[ \t]+[^\s]{1,80}){0,8}?[ \t]+-[ce]\b", re.I),
+        "netcat running a program",
+    ),  # fmt: skip
+    (
+        re.compile(
+            r"\brm(?:[ \t]+-{1,2}[\w-]{1,30}){1,6}[ \t]+(?:--no-preserve-root[ \t]+)?"
+            r"/\*?(?=\s|$)",
+            re.I,
+        ),
+        "deleting from the root",
+    ),  # fmt: skip
+    (
+        re.compile(r"\bchmod[ \t]+(?:[ugoa]{0,4}\+[rw]{0,2}x|[0-7]{0,1}[0-7]?7[0-7]{2})\b", re.I),
+        "making a file executable",
+    ),  # fmt: skip
+    (re.compile(r"\beval[ \t]*[$(\"'`]", re.I), "evaluating code"),
+    (
+        re.compile(
+            r"\bsetenforce[ \t]+(?:0|permissive)\b|SELINUX[ \t]*=[ \t]*(?:disabled|permissive)",
+            re.I,
+        ),
+        "turning SELinux off",
+    ),  # fmt: skip
+    (
+        re.compile(
+            r"\bsystemctl[ \t]+(?:stop|disable|mask|kill)[ \t]+(?:--now[ \t]+)?(?:firewalld|ufw"
+            r"|nftables|iptables|auditd|apparmor|fail2ban|rsyslog|systemd-journald|selinux\w*)",
             re.I,
         ),
         "stopping a firewall, audit or logging service",
     ),
     (
-        re.compile(r"\bufw\s+disable\b|\b(?:ip6?tables|nft)\s+(?:-F|flush)\b", re.I),
+        re.compile(
+            r"\bufw[ \t]+disable\b|\bip6?tables[ \t]+(?:-F|--flush|-P[ \t]+\w+[ \t]+ACCEPT)\b"
+            r"|\bnft[ \t]+flush\b",
+            re.I,
+        ),
         "dropping the firewall's rules",
-    ),
+    ),  # fmt: skip
     (re.compile(r"\baa-(?:disable|complain|teardown)\b", re.I), "turning AppArmor off"),
 )
 _IPV4 = re.compile(r"(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}(?:/\d{1,2})?(?![\w.])")
@@ -80,7 +120,9 @@ _EMAIL = re.compile(r"(?<![\w.+-])[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
 _TLDS = (
     "com|net|org|io|gov|edu|mil|info|biz|co|dev|app|cloud|xyz|site|online|top|ru|cn|us|uk"
     "|de|fr|nl|eu|jp|kr|in|br|au|ca|ch|se|no|fi|pl|cz|it|es|be|at|dk|ie|il|tw|hk|sg|me|tk"
-    "|ws|cc|tv|sh|ly|to|su|ir|kp|onion|local|lan|internal"
+    "|ws|cc|tv|sh|ly|to|su|ir|kp|onion|local|lan|internal|ai|gg|li|pw|pro|tech|link|click"
+    "|live|shop|store|club|name|mobi|asia|cn|vn|th|id|my|ph|ua|by|kz|tr|gr|ro|hu|pt|mx|ar|cl"
+    "|za|ng|ke|eg|sa|ae|pk|bd|lk|nz"
 )
 _HOST = re.compile(
     rf"(?<![\w.@/-])(?:[a-z0-9](?:[a-z0-9-]{{0,61}}[a-z0-9])?\.)+(?:{_TLDS})(?![\w-]|\.[\w-])", re.I
@@ -103,14 +145,24 @@ class Literal:
     text: str
 
 
+def plain(text: str) -> str:
+    """Text as matched: compatibility forms folded (full-width letters, ligatures and
+    the like read as the letters they stand for)."""
+    return unicodedata.normalize("NFKC", text)
+
+
 def literals(prose: str) -> list[Literal]:
     """The commands, addresses, paths and URLs in some prose, each once."""
+    prose = plain(prose)
     found: list[Literal] = []
+    seen: set[Literal] = set()
 
     def add(kind: str, text: str) -> None:
         text = text.strip().rstrip(".,;:)]")
-        if text and Literal(kind, text) not in found:
-            found.append(Literal(kind, text))
+        lit = Literal(kind, text)
+        if text and lit not in seen:
+            seen.add(lit)
+            found.append(lit)
 
     for match in _URL.finditer(prose):
         add("URL", match.group(0))
@@ -139,27 +191,55 @@ def literals(prose: str) -> list[Literal]:
 
 def dangers(prose: str) -> list[str]:
     """What in some prose a pack must never tell anyone to do."""
-    return [f"{why}: {m.group(0).strip()[:80]}" for p, why in _DANGER for m in p.finditer(prose)]
+    prose = plain(prose)
+    return [
+        f"{why}: {' '.join(m.group(0).split())[:80]}"
+        for p, why in _DANGER
+        for m in p.finditer(prose)
+    ]
 
 
 def _norm(text: str) -> str:
-    return " ".join(text.lower().split())
+    return " ".join(plain(text).lower().split())
 
 
 @dataclass(frozen=True)
 class Finding:
     literal: Literal
     sources: tuple[str, ...]  # the sources that contain it: none, it was made up
+    context: str = ""  # the words around it in the first of those, for the signer
+
+
+def _wanted(lit: Literal) -> str:
+    text = _norm(lit.text)
+    if lit.kind == "command":  # a source's "# systemctl …" is the model's "sudo systemctl …"
+        text = re.sub(r"^sudo\s+", "", text)
+    return text
 
 
 def look_up(found: list[Literal], sources: list[tuple[str, str]]) -> list[Finding]:
-    """Each literal with the sources (name, text) that contain it, whitespace and case
-    aside."""
+    """Each literal with the sources (name, text) that contain it whole (not as part of
+    a longer word, path or address), whitespace and case aside, and the words around
+    it in the first."""
     texts = [(name, _norm(text)) for name, text in sources]
-    return [
-        Finding(lit, tuple(name for name, text in texts if _norm(lit.text) in text))
-        for lit in found
-    ]
+    out = []
+    for lit in found:
+        pattern = re.compile(
+            r"(?<![\w./@:~-])" + re.escape(_wanted(lit)) + r"(?![\w/@~-]|[.:][\w/])"
+        )
+        given, context = [], ""
+        for name, text in texts:
+            match = pattern.search(text)
+            if match is None:
+                continue
+            given.append(name)
+            if not context:
+                start, end = max(0, match.start() - 60), min(len(text), match.end() + 60)
+                context = (
+                    ("…" if start else "") + text[start:end] + ("…" if end < len(text) else "")
+                )
+        out.append(Finding(lit, tuple(given), context))
+    return out
 
 
 def site(url: str) -> str:
