@@ -3,6 +3,10 @@
     drafter feeds fetch [FEED ...] [--since DATE] [--limit N]
     drafter feeds seed FEED --since DATE
     drafter feeds status
+    drafter candidates refresh|list|add …
+    drafter fill CVE … / drafter propose CVE …
+    drafter web [--port N] [--origin URL]
+    drafter decisions
 
 Exit codes: 0 fine, 1 a feed failed or needs a look, 2 bad usage, 3 another run
 holds the lock.
@@ -18,13 +22,14 @@ import os
 import sys
 import time
 import unicodedata
+import urllib.parse
 from pathlib import Path
 
-from drafter import __version__, candidates, fill, thirdparty, timeutil
+from drafter import __version__, candidates, decisions, fill, thirdparty, timeutil
 from drafter.feeds import CVE_ID, Context, all_feeds, by_name, nvd, run_feeds, run_one, seed_feed
 from drafter.feeds.osv import Osv
 from drafter.http import Fetcher
-from drafter.status import report
+from drafter.status import needing_a_look, report
 from drafter.store import Store, StoreError
 
 
@@ -145,6 +150,18 @@ def _parser() -> argparse.ArgumentParser:
     prop.add_argument("--binaries", nargs="+", default=[], metavar="GLOB")
     prop.add_argument("--watch", metavar="CPE", help="the watched product, e.g. php:php")
     prop.add_argument("--out", type=Path, required=True, help="the proposals file to write")
+
+    web = commands.add_parser("web", help="the candidate page, to approve or reject (A.4)")
+    web.add_argument("--port", type=int, default=8089, help="on 127.0.0.1 (default: %(default)s)")
+    web.add_argument(
+        "--origin",
+        default="https://packs.localhost:8443",
+        help="the address the browser uses, through Caddy (default: %(default)s)",
+    )
+    web.add_argument(
+        "--days", type=int, default=30, help="signalled in the last N days (default: %(default)s)"
+    )
+    commands.add_parser("decisions", help="every approve and reject, newest first (A.4)")
     return parser
 
 
@@ -168,6 +185,18 @@ def main(argv: list[str] | None = None) -> int:
     home: Path = args.home
     home.mkdir(mode=0o700, parents=True, exist_ok=True)
     known = by_name()
+    if args.command == "web":
+        return _web(home, args)
+    if args.command == "decisions":
+        try:
+            store = _reader(home / "drafter.sqlite3")
+        except StoreError as exc:
+            print(safe(exc), file=sys.stderr)
+            return 1
+        try:
+            return _decisions(store)
+        finally:
+            store.close()
     if getattr(args, "action", None) in ("list", "status"):
         # Reading needs no lock (SQLite's write-ahead log), so status works mid-seed,
         # and opens read-only, so it never upgrades a store an older install writes.
@@ -259,14 +288,21 @@ def _window(args) -> str:
 
 
 def _candidates_list(store: Store, args) -> int:
-    notes = [
-        f"{r.feed}: {r.state}, {r.detail}"
-        for r in report(store, [*all_feeds(), candidates.VendorRecords("", 0)], timeutil.now())
-        if not r.ok
-    ]
+    notes = needing_a_look(store, timeutil.now())
     since = _window(args)
     found = candidates.classify(store, since)
-    print(safe_lines(candidates.render(found, since, notes, show_all=args.all)))
+    by_cve = decisions.latest(decisions.history(store))
+    print(
+        safe_lines(
+            candidates.render(
+                found,
+                since,
+                notes,
+                show_all=args.all,
+                decided=lambda threat: decisions.describe(decisions.state(threat, by_cve)),
+            )
+        )
+    )
     return 0
 
 
@@ -370,6 +406,48 @@ def _propose(ctx: Context, args) -> int:
 
 def safe_lines(text: str) -> str:
     return "\n".join(safe(line) for line in text.split("\n"))
+
+
+def _web(home: Path, args) -> int:
+    from drafter import web  # Jinja2 is only needed here
+
+    origin = args.origin.rstrip("/")
+    parts = urllib.parse.urlsplit(origin)
+    if parts.scheme not in ("http", "https") or not parts.netloc or parts.path:
+        print("--origin is a scheme and host, like https://packs.localhost:8443", file=sys.stderr)
+        return 2
+    if not 0 < args.port < 65536 or args.days < 1:
+        print("--port is 1 to 65535 and --days at least 1", file=sys.stderr)
+        return 2
+    site = web.Site(home=home, port=args.port, origin=origin, days=args.days)
+    try:
+        server = web.make_server(site)
+    except (StoreError, OSError) as exc:
+        print(safe(exc), file=sys.stderr)
+        return 1
+    print(f"the candidate page: {origin} (listening on 127.0.0.1:{args.port})", flush=True)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+    return 0
+
+
+def _decisions(store: Store) -> int:
+    decided = decisions.history(store)
+    if not decided:
+        print("no decisions yet: `drafter web` is where they are made")
+    for d in decided:
+        verdict = "approved" if d.verdict == "approve" else "rejected"
+        print(
+            safe(
+                f"{d.decided_at[:16].replace('T', ' ')}  {verdict}  {', '.join(d.families) or '?'}"
+                f"  {', '.join(d.cves)}  by {d.decided_by}: {d.reason}"
+            )
+        )
+    return 0
 
 
 def _status(store: Store) -> int:

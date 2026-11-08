@@ -715,8 +715,14 @@ def _releases(packages: list[dict]) -> str:
 
 
 def render(
-    candidates: list[Candidate], since: str, feed_notes: list[str], *, show_all: bool = False
+    candidates: list[Candidate],
+    since: str,
+    feed_notes: list[str],
+    *,
+    show_all: bool = False,
+    decided=None,
 ) -> str:
+    """`decided`: a threat's decision line (A.4), for the sections a person decides."""
     lines = []
     if feed_notes:
         lines.append("Feeds needing a look (the list may be missing threats):")
@@ -748,6 +754,8 @@ def render(
                 for cand in group.candidates:
                     via += [v for v in cand.watched_via if v not in via]
                 lines.append(f"      matched: {'; '.join(via) or 'NVD names the product'}")
+            if decided is not None and kind in ("judge", "thirdparty"):
+                lines.append(f"      decision: {decided(group)}")
             sigs = sorted({s.describe() for c in group.candidates for s in c.signals})
             lines.append(f"      signals: {'; '.join(sigs)}")
             if kind == "judge":
