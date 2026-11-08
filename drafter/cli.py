@@ -5,6 +5,7 @@
     drafter feeds status
     drafter candidates refresh|list|add …
     drafter fill CVE … / drafter propose CVE …
+    drafter draft CVE … [--out FILE] [--dry-run] / drafter spend
     drafter web [--port N] [--origin URL] [--packs DIR]
     drafter decisions
 
@@ -17,8 +18,10 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import fcntl
+import json
 import logging
 import os
+import re
 import sqlite3
 import sys
 import time
@@ -152,6 +155,23 @@ def _parser() -> argparse.ArgumentParser:
     prop.add_argument("--watch", metavar="CPE", help="the watched product, e.g. php:php")
     prop.add_argument("--out", type=Path, required=True, help="the proposals file to write")
 
+    drafting = commands.add_parser(
+        "draft", help="an AI draft of an approved threat's title, detections and remediation (A.5)"
+    )
+    drafting.add_argument("cves", nargs="+", metavar="CVE")
+    drafting.add_argument("--out", type=Path, help="write the draft here (default: print it)")
+    drafting.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="show what would be sent and its most possible cost; send nothing",
+    )
+    drafting.add_argument(
+        "--past-tell-mark",
+        action="store_true",
+        help="go on past the $5 at which John asked to be told (only once he has said so)",
+    )
+    commands.add_parser("spend", help="every request sent to the AI, and the caps (A.5)")
+
     web = commands.add_parser("web", help="the candidate page, to approve or reject (A.4)")
     web.add_argument("--port", type=int, default=8089, help="on 127.0.0.1 (default: %(default)s)")
     web.add_argument(
@@ -194,13 +214,19 @@ def main(argv: list[str] | None = None) -> int:
     known = by_name()
     if args.command == "web":
         return _web(home, args)
-    if args.command == "decisions":
+    if args.command in ("decisions", "spend") or (
+        args.command == "draft" and getattr(args, "dry_run", False)
+    ):
         try:
             store = _reader(home / "drafter.sqlite3")
         except StoreError as exc:
             print(safe(exc), file=sys.stderr)
             return 1
         try:
+            if args.command == "spend":
+                return _spend(store)
+            if args.command == "draft":
+                return _draft_dry(store, args)
             return _decisions(store)
         finally:
             store.close()
@@ -237,6 +263,8 @@ def main(argv: list[str] | None = None) -> int:
             return _candidates_write(ctx, args)
         if args.command == "fill":
             return _fill(ctx, args)
+        if args.command == "draft":
+            return _draft(ctx.store, args)
         if args.command == "propose":
             return _propose(ctx, args)
         if args.action == "fetch":
@@ -442,6 +470,112 @@ def _web(home: Path, args) -> int:
         pass
     finally:
         server.server_close()
+    return 0
+
+
+def _draft_cves(args) -> list[str] | None:
+    cves = sorted({c.strip().upper() for c in args.cves})
+    bad = [c for c in cves if not CVE_ID.match(c)]
+    if bad:
+        print(f"not CVE numbers: {safe(', '.join(bad))}", file=sys.stderr)
+        return None
+    return cves
+
+
+def _package_names(store: Store, cves: list[str]) -> set[str]:
+    """The threat's package names that would give a package away in prose: those
+    with a digit or a sign in them (dotnet8.0, java-17-openjdk), not plain words a
+    sentence uses for the software (brotli, php)."""
+    since = timeutil.fmt(timeutil.now() - dt.timedelta(days=3650))
+    names = set()
+    for cand in candidates.classify(store, since):
+        if cand.cve in cves:
+            names |= {p["package"] for p in cand.packages if re.search(r"[\d+._-]", p["package"])}
+    return names
+
+
+def _draft_dry(store: Store, args) -> int:
+    from drafter import draft
+
+    cves = _draft_cves(args)
+    if cves is None:
+        return 2
+    try:
+        decision = draft.approved(store, cves)
+    except draft.DraftError as exc:
+        print(safe(exc), file=sys.stderr)
+        return 2
+    found = draft.sources(store, list(decision.cves))
+    messages = [{"role": "user", "content": draft.user_message(list(decision.cves), found)}]
+    tokens = draft.estimate(draft.SYSTEM, messages)
+    print(f"approved {decision.decided_at[:10]}: {', '.join(decision.cves)}")
+    for s in found:
+        print(safe(f"  source: {s.name} ({len(s.text)} characters, fetch {s.fetch_id})"))
+    print(
+        f"about {tokens} tokens in, by the rough estimate; at most"
+        f" ${draft.worst_cost(tokens):.2f} for the first request (cap ${draft.PER_DRAFT_CAP:.2f}"
+        f" a draft); ${draft.spent(store):.2f} spent of ${draft.TOTAL_CAP:.2f}. Nothing sent."
+    )
+    return 0
+
+
+def _draft(store: Store, args) -> int:
+    import anthropic
+
+    from drafter import draft
+
+    cves = _draft_cves(args)
+    if cves is None:
+        return 2
+    try:
+        client = anthropic.Anthropic(max_retries=0)
+    except anthropic.AnthropicError as exc:
+        print(f"no API key: {safe(exc)}", file=sys.stderr)
+        return 2
+    try:
+        made = draft.draft(
+            store,
+            cves,
+            client,
+            names=_package_names(store, cves),
+            past_tell=args.past_tell_mark,
+        )
+    except draft.DraftError as exc:
+        print(safe(exc), file=sys.stderr)
+        return 1
+    text = draft.render(made, timeutil.fmt(timeutil.now())[:16].replace("T", " ") + " UTC")
+    if args.out:
+        args.out.write_text(text, encoding="utf-8")
+        print(f"draft written to {safe(args.out)}")
+    else:
+        print(safe_lines(text))
+    print(
+        f"this draft: ${made.cost:.4f}; spent ${draft.spent(store):.2f} of ${draft.TOTAL_CAP:.2f}"
+    )
+    if not made.ok:
+        print("NOT USABLE: the answer was refused (the reasons are in the draft)", file=sys.stderr)
+        return 1
+    return 0
+
+
+def _spend(store: Store) -> int:
+    from drafter import draft
+
+    rows = draft.ledger(store)
+    for r in rows:
+        state = "" if r["settled"] else "  (never settled: counted at its most)"
+        print(
+            safe(
+                f"{r['sent_at'][:16].replace('T', ' ')}  {', '.join(json.loads(r['cves']))}"
+                f"  try {r['attempt']}  {r['stop_reason'] or '?'}  ${r['cost']:.4f}"
+                f"  {r['request_id'] or ''}{state}"
+            )
+        )
+    total = draft.spent(store)
+    print(
+        f"spent ${total:.2f} of ${draft.TOTAL_CAP:.2f}; at most ${draft.PER_DRAFT_CAP:.2f} a"
+        f" draft; John is told at ${draft.TELL_AT:.2f} ({draft.MODEL}, D6)"
+    )
     return 0
 
 
