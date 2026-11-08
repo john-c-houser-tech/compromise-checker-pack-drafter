@@ -220,18 +220,34 @@ _CVSS_ORDER = (
     ("cvssMetricV40", "Primary"),
     ("cvssMetricV40", "Secondary"),
 )
-CVSS_VECTOR = re.compile(r"\ACVSS:(3\.0|3\.1|4\.0)(/[A-Z]{1,3}:[A-Z])+\Z")
+# Values are a letter, but 4.0's Provider Urgency is a word (U:Amber).
+CVSS_VECTOR = re.compile(r"\ACVSS:(3\.0|3\.1|4\.0)(/[A-Z]{1,3}:[A-Za-z]{1,10})+\Z")
 _SOURCE = re.compile(r"\A[A-Za-z0-9._@+-]{1,100}\Z")
+
+
+# CISA's own scores, added to other organisations' CVEs (its "ADP" role), which NVD
+# names by this id rather than an address. They come after the reporter's.
+CISA_ADP = "134c704f-9b21-4f2e-91b3-4a467353bcc0"
 
 
 def cvss(metrics: object) -> str | None:
     """The one CVSS score a card shows, as JSON {version, vector, score, source}."""
     if not isinstance(metrics, dict):
         return None
+    for cisa_pass in (False, True):
+        found = _first_score(metrics, cisa_pass)
+        if found:
+            return found
+    return None
+
+
+def _first_score(metrics: dict, cisa_pass: bool) -> str | None:
     for key, kind in _CVSS_ORDER:
         items = metrics.get(key)
         for item in items if isinstance(items, list) else []:
             if not isinstance(item, dict) or item.get("type") != kind:
+                continue
+            if (item.get("source") == CISA_ADP) != cisa_pass:
                 continue
             data = item.get("cvssData")
             if not isinstance(data, dict):

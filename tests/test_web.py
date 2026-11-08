@@ -161,7 +161,19 @@ class Page:
             "verdict": "approve",
             "reason": "PHP2Shell",
         }
-        return urllib.parse.urlencode({**base, **fields})
+        merged = {**base, **fields}
+        if "signs" not in merged:  # as the page shows them now, as a browser sends them
+            merged["signs"] = self.signs(merged["cves"])
+        return urllib.parse.urlencode(merged)
+
+    def signs(self, cves):
+        _, html = self.request("GET")
+        found = re.search(
+            rf'name="cves" value="{re.escape(cves)}">\s*<input type="hidden" name="families"'
+            r' value="[^"]*">\s*<input type="hidden" name="signs" value="([^"]*)"',
+            html,
+        )
+        return found[1] if found else ""
 
     def post(self, body, **headers):
         sent = {
@@ -248,32 +260,31 @@ def test_the_page_answers_only_to_its_own_names(page):
     assert response.status == 200
 
 
+PS = "&signs=nvd:CVE-2026-109618,nvd:CVE-2026-109619"  # the PHP card's signs, as shown
+BOTH = "&cves=CVE-2026-109618,CVE-2026-109619&families=php"
+
+
 @pytest.mark.parametrize(
     ("body", "status"),
     [
+        (f"token=x&kind=judge{BOTH}{PS}&verdict=approve&reason=r", 403),
         (
-            "token=x&kind=judge&cves=CVE-2026-109618,CVE-2026-109619&families=php&verdict=approve&reason=r",
-            403,
+            "token=T&kind=judge&cves=CVE-2026-109618&families=php&signs=nvd:CVE-2026-109618"
+            "&verdict=approve&reason=r",
+            409,
         ),
-        ("token=T&kind=judge&cves=CVE-2026-109618&families=php&verdict=approve&reason=r", 409),
-        ("token=T&kind=kernel&cves=CVE-2026-98432&families=kernel&verdict=approve&reason=r", 400),
+        (f"token=T&kind=judge{BOTH}&signs=&verdict=approve&reason=r", 409),  # shown no signs
+        (f"token=T&kind=judge{BOTH}&signs=nvd:CVE-2026-109618&verdict=approve&reason=r", 409),
         (
-            "token=T&kind=judge&cves=CVE-2026-109618,CVE-2026-109619&families=php&verdict=maybe&reason=r",
+            "token=T&kind=kernel&cves=CVE-2026-98432&families=kernel&signs=nvd:CVE-2026-98432"
+            "&verdict=approve&reason=r",
             400,
         ),
-        (
-            "token=T&kind=judge&cves=CVE-2026-109618,CVE-2026-109619&families=php&verdict=reject&reason=+",
-            400,
-        ),
-        (
-            "token=T&kind=judge&cves=CVE-2026-109618,CVE-2026-109619&families=php&verdict=approve",
-            400,
-        ),
-        (
-            "token=T&kind=judge&cves=CVE-2026-109618,CVE-2026-109619&families=php"
-            "&verdict=approve&verdict=reject&reason=r",
-            400,
-        ),
+        (f"token=T&kind=judge{BOTH}{PS}&verdict=maybe&reason=r", 400),
+        (f"token=T&kind=judge{BOTH}{PS}&verdict=reject&reason=+", 400),
+        (f"token=T&kind=judge{BOTH}{PS}&verdict=approve", 400),  # no reason field at all
+        (f"token=T&kind=judge{BOTH}&verdict=approve&reason=r", 400),  # no signs field
+        (f"token=T&kind=judge{BOTH}{PS}&verdict=approve&verdict=reject&reason=r", 400),
         ("token=T&a=1&&b", 400),
         ("token=T&reason=%ff", 400),
     ],
@@ -282,6 +293,11 @@ def test_odd_forms_are_refused(page, body, status):
     response, _ = page.post(body.replace("token=T", f"token={page.site.token}"))
     assert response.status == status
     assert _stored(page) == []
+
+
+def test_the_forms_signs_are_the_ones_the_page_shows(page):
+    assert page.signs(",".join(PHP)) == PS.removeprefix("&signs=")
+    assert page.post(page.form(signs=PS.removeprefix("&signs=")))[0].status == 303
 
 
 def test_a_refused_reason_stays_in_its_box(page):
@@ -805,7 +821,7 @@ def test_a_pack_naming_some_of_the_cves_leaves_the_form_open(page, tmp_path):
 
 
 def test_packs_that_cant_be_read_mark_nothing_covered(page, tmp_path):
-    page.site.packs = _packs(tmp_path, "id: someone-else\ncves: [CVE-2026-109618]\n")
+    page.site.packs = _packs(tmp_path, "id: someone-else\nversion: 1\ncves: [CVE-2026-109618]\n")
     _, html = page.request("GET")
     assert "Signed packs couldn't be read" in html and "isn&#39;t the pack" in html
     assert "Undecided" in _card_html(html, PHP[0])
@@ -817,3 +833,101 @@ def test_packs_that_cant_be_read_mark_nothing_covered(page, tmp_path):
 def test_web_wants_a_clone_with_an_index(tmp_path, capsys):
     assert cli.main(["--home", str(tmp_path), "web", "--packs", str(tmp_path / "nope")]) == 2
     assert "no index.yaml" in capsys.readouterr().err
+
+
+def test_a_form_from_a_page_that_didnt_show_a_new_sign_is_refused(page):
+    _with(page, lambda s: _rated_only(s, DOTNET))
+    body = page.form(cves=DOTNET, families="dotnet", verdict="reject", reason="no attacks")
+    _with(page, lambda s: _kev(s, DOTNET, "2026-11-07"))  # the hourly run, meanwhile
+    response, html = page.post(body)
+    assert response.status == 409 and "attacks were reported" in html
+    assert "no attacks</textarea>" in html  # the reason kept in its box
+    assert _stored(page) == []
+    body = page.form(cves=DOTNET, families="dotnet", verdict="reject", reason="still no")
+    assert page.post(body)[0].status == 303
+    assert _stored(page)[0].signs == (f"kev:{DOTNET}",)
+
+
+def test_a_reject_made_knowing_of_attacks_isnt_brought_back_by_cisas_list(page):
+    # PHP: CISA said active when it was rejected; CISA's list adding it is no news.
+    assert page.post(page.form(verdict="reject", reason="GitLab, not Ruby"))[0].status == 303
+    _with(page, lambda s: [_kev(s, cve, "2026-11-07") for cve in PHP])
+    _, html = page.request("GET")
+    card = _card_html(html, PHP[0])
+    assert "pill-reject" in card and "Look again" not in card
+
+
+def test_a_reject_comes_back_for_its_cve_that_had_no_sign(page):
+    other = "CVE-2026-70189"
+
+    def seed(s):
+        _rated_only(s, DOTNET)
+        _rated_only(s, other)
+        _nvd(s, other, "2026-10-20T00:00:00.000000Z")  # this one: CISA says active
+
+    _with(page, seed)
+    cves = f"{DOTNET},{other}"
+    body = page.form(cves=cves, families="dotnet", verdict="reject", reason="not on servers")
+    assert page.post(body)[0].status == 303
+    _with(page, lambda s: _kev(s, other, "2026-11-07"))
+    _, html = page.request("GET")
+    assert "Look again" not in _card_html(html, DOTNET)
+    _with(page, lambda s: _kev(s, DOTNET, "2026-11-07"))
+    _, html = page.request("GET")
+    card = _card_html(html, DOTNET)
+    assert "Look again" in card
+    since = card.split("Attacks reported since:</strong>", 1)[1].split("<", 1)[0]
+    assert DOTNET in since and other not in since
+
+
+def test_packs_with_a_bad_date_say_so_and_the_page_still_works(page, tmp_path):
+    page.site.packs = _packs(
+        tmp_path, "id: php2shell-2026-10\nversion: 1\npublished: 2026-02-30\ncves: []\n"
+    )
+    response, html = page.request("GET")
+    assert response.status == 200 and "Signed packs couldn't be read" in html
+    assert page.post(page.form(reason="still works"))[0].status == 303
+
+
+def test_a_refused_reject_on_a_folded_card_comes_back_open_and_named(page, tmp_path):
+    page.site.packs = _packs(tmp_path)
+    response, html = page.post(page.form(verdict="reject", reason=""))
+    assert response.status == 400
+    assert "Not recorded for php (CVE-2026-109618, CVE-2026-109619)" in html
+    card = _card_html(html, PHP[0])
+    assert "<details open><summary>Decide anyway</summary>" in card
+
+
+def test_a_cve_that_joined_after_a_reject_isnt_an_attack_reported_since(page):
+    later = "CVE-2026-70190"
+    _with(page, lambda s: _rated_only(s, DOTNET))
+    body = page.form(cves=DOTNET, families="dotnet", verdict="reject", reason="no attacks")
+    assert page.post(body)[0].status == 303
+
+    def join(s):
+        _rated_only(s, later, "2026-10-25T00:00:00.000000Z")
+        _kev(s, later, "2026-10-25")
+
+    _with(page, join)
+    _, html = page.request("GET")
+    card = _card_html(html, DOTNET)
+    assert "Look again" in card and f"Came after it:</strong> {later}" in card
+    assert "Attacks reported since" not in card
+
+
+def test_bidi_and_control_characters_in_fetched_text_dont_reach_the_page(page):
+    flip = chr(0x202E)
+
+    def seed(s):
+        s.db.execute(
+            "UPDATE nvd SET description = ? WHERE cve = ?",
+            (f"A flaw{flip} in PHP\x1b[31m.", PHP[0]),
+        )
+        s.db.execute("UPDATE kev SET name = ? WHERE cve = ?", (f"PHP{flip}", PHP[0]))
+
+    _with(page, lambda s: [_kev(s, cve, "2026-10-26") for cve in PHP])
+    _with(page, seed)
+    _, html = page.request("GET")
+    card = _card_html(html, PHP[0])
+    assert flip not in html and "\x1b" not in html
+    assert "A flaw in PHP [31m." in card and "CISA: PHP</div>" in card

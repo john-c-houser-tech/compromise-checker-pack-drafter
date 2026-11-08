@@ -158,6 +158,7 @@ def _card(
         "fix": cards.fix(packages) if threat.kind == "judge" else None,
         "words": cards.words(threat, known),
         "covers": cover,
+        "signs": decisions.shown_signs(threat),
         # Covered folds the form away only while nobody has decided it: a decision,
         # or a reason to look again, is shown as for any other threat.
         "covered": st.word == "undecided" and bool(cover) and cover[0].full,
@@ -260,14 +261,23 @@ def page(site: Site, data: dict, *, error: str | None = None, kept: dict | None 
     )
 
 
-def find(groups: list[candidates.Threat], kind: str, cves: list[str], families: list[str]):
-    """The threat the form was for, if it is still just as the page showed it."""
+def find(
+    groups: list[candidates.Threat],
+    kind: str,
+    cves: list[str],
+    families: list[str],
+    signs: str,
+):
+    """The threat the form was for, if it is still just as the page showed it,
+    signs of attacks included: a reject keeps the signs it was made with, so one
+    sent from a page that didn't show a new sign would bury it."""
     wanted = sorted(cves)
     for group in groups:
         if (
             group.kind == kind
             and sorted(c.cve for c in group.candidates) == wanted
             and list(group.families) == families
+            and decisions.shown_signs(group) == signs
         ):
             return group
     return None
@@ -398,6 +408,7 @@ class Handler(BaseHTTPRequestHandler):
             "kind",
             "cves",
             "families",
+            "signs",
             "verdict",
             "reason",
         } <= set(fields):
@@ -426,7 +437,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             cves = [c for c in fields["cves"].split(",") if c]
             families = [f for f in fields["families"].split(",") if f]
-            threat = find(data["groups"], fields["kind"], cves, families)
+            threat = find(data["groups"], fields["kind"], cves, families, fields["signs"])
             # Back in the box of a threat that has one, whatever happened to the CVEs.
             kept = {"anchor": nearest(data["shown"], cves), "reason": fields["reason"]}
             if threat is None:
@@ -436,8 +447,8 @@ class Handler(BaseHTTPRequestHandler):
                         self.site,
                         data,
                         error="That threat changed since the page loaded (a CVE joined or"
-                        " left it, its packages changed, or it moved section). Look at it"
-                        " again below; "
+                        " left it, its packages changed, it moved section, or attacks were"
+                        " reported). Look at it again below; "
                         + (
                             "your reason is kept in its box."
                             if kept["anchor"]
@@ -458,9 +469,16 @@ class Handler(BaseHTTPRequestHandler):
                     timeutil.fmt(self.site.now()),
                 )
             except decisions.DecisionError as exc:
+                name = ", ".join(threat.families) or "?"
                 self._html(
                     HTTPStatus.BAD_REQUEST,
-                    page(self.site, data, error=str(exc), kept=kept),
+                    page(
+                        self.site,
+                        data,
+                        error=f"Not recorded for {name} ({', '.join(cves)}): {exc}."
+                        " Its box is open below.",
+                        kept=kept,
+                    ),
                 )
                 return
             except sqlite3.OperationalError as exc:

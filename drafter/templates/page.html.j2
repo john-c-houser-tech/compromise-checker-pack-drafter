@@ -102,18 +102,20 @@
         {% if st.attacked %}<br><strong>Attacks reported since:</strong> {{ st.attacked|join("; ") }}{% endif %}
       </p>
       {% endif %}
-      {% set keep = kept.reason if kept.anchor == c.anchor else "" %}
+      {% set mine = kept.anchor == c.anchor %}
+      {% set keep = kept.reason if mine else "" %}
       {% set folded = c.covered or not st.open %}
       {% if not folded %}
       <form class="decide" method="post" action="/decide">
       {% else %}
-      <details{% if keep %} open{% endif %}><summary>{{ "Decide anyway" if c.covered else "Decide again" }}</summary>
+      <details{% if mine %} open{% endif %}><summary>{{ "Decide anyway" if c.covered else "Decide again" }}</summary>
       <form class="decide" method="post" action="/decide">
       {% endif %}
         <input type="hidden" name="token" value="{{ token }}">
         <input type="hidden" name="kind" value="{{ c.kind }}">
         <input type="hidden" name="cves" value="{{ c.cves|join(',') }}">
         <input type="hidden" name="families" value="{{ c.families }}">
+        <input type="hidden" name="signs" value="{{ c.signs }}">
         <label for="r-{{ c.anchor }}">Reason (needed to reject; optional to approve)</label>
         <textarea id="r-{{ c.anchor }}" name="reason" rows="2" maxlength="1000">{{ keep }}</textarea>
         <div class="buttons">

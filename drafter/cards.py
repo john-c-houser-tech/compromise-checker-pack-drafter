@@ -60,6 +60,10 @@ def facts(store: Store, cves: list[str]) -> dict[str, Facts]:
             batch,
         ):
             rows[row[0]].update(rh_title=row[1], rh_statement=row[2])
+    for data in rows.values():
+        for name in ("kev_name", "description", "rh_title", "rh_statement"):
+            if name in data:
+                data[name] = clean(data[name])
     return {cve: Facts(cve, **data) for cve, data in rows.items()}
 
 
@@ -161,10 +165,21 @@ def what(threat: Threat, known: dict[str, Facts]) -> list[tuple[str, str]]:
     return out
 
 
+def clean(text: str | None) -> str | None:
+    """Fetched text as one line of printable characters: no control or bidi
+    characters, which could turn the page's own words around."""
+    if text is None:
+        return None
+    return " ".join("".join(ch if ch.isprintable() else " " for ch in text).split()) or None
+
+
 def _cut(text: str) -> str:
     if len(text) <= WORDS_CUT:
         return text
-    return text[:WORDS_CUT].rsplit(" ", 1)[0] + " …"
+    head = text[:WORDS_CUT]
+    space = head.rfind(" ")
+    # At a space if there's one near the end; a long run with none (a URL) is cut.
+    return (head[:space] if space >= WORDS_CUT - 100 else head) + " …"
 
 
 def words(threat: Threat, known: dict[str, Facts]) -> list[dict]:
@@ -241,8 +256,17 @@ def reach_words(vector: str) -> str | None:
     return text[0].upper() + text[1:]
 
 
+# Organisations NVD names by an id rather than an address.
+_WHO_IDS = {
+    "134c704f-9b21-4f2e-91b3-4a467353bcc0": "CISA",
+    "416baaa9-dc9f-4396-8d5f-8c081fb06d67": "kernel.org",
+}
+
+
 def whose(source: str) -> str:
     """Whose score: NVD's, or the organisation that reported it."""
+    if source.lower() in _WHO_IDS:
+        return f"{_WHO_IDS[source.lower()]}'s"
     domain = source.rpartition("@")[2].lower() if "@" in source else ""
     for known, name in _WHO.items():
         if domain == known or domain.endswith("." + known):

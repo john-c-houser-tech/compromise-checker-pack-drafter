@@ -1080,7 +1080,7 @@ def test_upgrade_from_schema_1_fills_nvd_names(tmp_path, capsys):
     db.commit()
     db.close()
     assert cli.main(["--home", str(home), "candidates", "add", PHP, "--note", "x"]) == 0
-    assert "NVD rows filled for 1 CVE(s)" in capsys.readouterr().out
+    assert "NVD rows for 1 CVE(s)" in capsys.readouterr().out
     s = Store(home / "drafter.sqlite3")
     row = s.db.execute("SELECT products, description FROM nvd").fetchone()
     assert json.loads(row[0]) == ["php:php"] and "PHP" in row[1]

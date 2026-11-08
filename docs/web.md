@@ -39,23 +39,27 @@ For the two sections a person decides, from data the drafter already fetched
   act, hard to pull off, only under certain conditions), naming whose score it is:
   a score can belong to a product built on the package (GitLab's 10.0 on a Ruby
   card). NVD's own CVSS 3.1 first, then the reporting organisation's, then 3.0 the
-  same way, then 4.0.
+  same way, then 4.0; CISA's scores added to others' CVEs come after all of those.
 - **Ratings:** Red Hat's and Ubuntu's own, which put a CVE on the list (plan D3)
   but aren't evidence of attacks.
 - **Fix:** the Packages line in one: fixed everywhere, nowhere, or which aren't.
 - **What NVD and Red Hat say:** behind a fold, NVD's description and Red Hat's
   statement, each cut to about 600 characters, with a link to the whole record.
-  Fetched text: escaped, like everything on the page; read by a person only. The
-  same words for several CVEs are shown once.
+  Fetched text: escaped, like everything on the page, and without control or bidi
+  characters (which could turn the page's own words around); read by a person only.
+  The same words for several CVEs are shown once.
 - **Pack** and **Covered:** with `--packs`, the page reads a local clone of
   compromise-checker-packs (`index.yaml`, then each listed `PACK.yaml`'s `cves`).
   A threat whose every CVE one signed pack names reads *Covered*: its form is
   folded behind "Decide anyway", and it isn't counted as still to decide. A pack
-  naming only some of the CVEs is shown, and the form stays open. The signatures
-  aren't checked, since a wrong mark only folds a form; so anything odd in the
-  clone (a pack missing, an id that doesn't match, a path outside it) marks
-  nothing Covered and says so at the top. Once someone decides a Covered threat,
-  it shows as decided.
+  naming only some of the CVEs is shown, and the form stays open. The index's
+  signature isn't checked, since a wrong mark only folds a form, but each
+  `PACK.yaml` must have the sha256 and version the index lists, so a pack edited
+  in the clone (a draft, another branch) doesn't count. Anything odd in the clone
+  (a pack missing or edited, an id that doesn't match, a path outside it, YAML
+  anchors or aliases, which packs don't use, or nesting past 32 levels) marks
+  nothing Covered and says so at the top. A pack naming no CVEs covers nothing.
+  Once someone decides a Covered threat, it shows as decided.
 
 Kernel and set-aside cards keep their plain list of signals.
 
@@ -100,11 +104,15 @@ window, 30 days by default).
   that has only aged off the list doesn't count.
 - **A reject comes back if attacks are reported after it.** Each decision keeps
   the signs of attacks it was made with (on CISA's list, CISA's "active", added by
-  hand), CVE by CVE. A reject reads **Look again** when one of its threat's CVEs
-  gains a sign it didn't have, even after the 30 days (as far back as the page
-  reads). A sign re-dated (CISA re-stamps its ratings in batches) isn't a new one.
-  An approve doesn't come back this way, and nor does a reject made before schema
-  5, which didn't keep its signs.
+  hand), CVE by CVE. A reject reads **Look again** when one of its CVEs that had no
+  sign of attacks gains one, even after the 30 days (as far back as the page
+  reads). A CVE already attacked when it was rejected doesn't come back when CISA
+  lists it too: that's the same evidence, and the reject was made knowing it. A
+  sign re-dated (CISA re-stamps its ratings in batches) isn't a new one. An approve
+  doesn't come back this way, and nor does a reject made before schema 5, which
+  didn't keep its signs. The form carries the signs its card showed, so a decision
+  sent from a page loaded before a new sign arrived is refused (409) and the
+  threat shown as it now stands, the reason kept in its box.
 - **Checked against the list as it is now.** A form for a threat whose CVEs,
   section or package families changed since the page loaded is refused (409);
   the page shows the threat as it now stands, with the reason kept in its box.
@@ -143,8 +151,9 @@ store's schema:
 After each install, restart it (`systemctl --user restart pack-drafter-web`): it
 keeps the code it started with. The first open after an install that moves the
 store up a schema fills the new columns from the pages already kept (schema 5:
-about a minute on a 180-day store), whether that is the page or the hourly run. If
-that is cut short, `drafter candidates refresh --reparse` fills them again. And a Caddy block, like the other local services:
+about a minute on a 180-day store), whether that is the page or the hourly run.
+The move marks the fill as owed and the fill clears the mark, so one cut short is
+done again by the next command or page start. And a Caddy block, like the other local services:
 
     packs.localhost:8443 {
     	bind 127.0.0.1 ::1

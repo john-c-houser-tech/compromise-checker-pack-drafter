@@ -154,12 +154,24 @@ def attack_signs(threat: Threat) -> dict[str, str]:
 
 
 def attacked_since(decision: Decision, threat: Threat) -> tuple[str, ...]:
-    """Signs of attacks that came after a reject, described. Only a reject comes
-    back this way, and only one that kept its signs (schema 5 on)."""
+    """Signs of attacks on a reject's CVEs that had none when it was made, described.
+    A CVE already attacked then (CISA said active) doesn't bring it back when CISA
+    lists it too: that's the same evidence, and the reject was made knowing it.
+    Only a reject comes back this way, and only one that kept its signs (schema 5
+    on). CVEs the reject didn't cover are another matter ("came after it")."""
     if decision.verdict != "reject" or decision.signs is None:
         return ()
-    kept = set(decision.signs)
-    return tuple(text for key, text in sorted(attack_signs(threat).items()) if key not in kept)
+    had = {key.split(":", 1)[1] for key in decision.signs}
+    return tuple(
+        text
+        for key, text in sorted(attack_signs(threat).items())
+        if key.split(":", 1)[1] in decision.cves and key.split(":", 1)[1] not in had
+    )
+
+
+def shown_signs(threat: Threat) -> str:
+    """The signs of attacks a card showed, as its form sends them back."""
+    return ",".join(sorted(attack_signs(threat)))
 
 
 def state(threat: Threat, by_cve: dict[str, Decision], listed: Collection[str] = ()) -> State:

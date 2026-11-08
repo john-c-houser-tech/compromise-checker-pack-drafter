@@ -157,7 +157,9 @@ def test_reach_words(vector, words):
         ("secalert_us@oracle.com", "Oracle's"),
         ("infosec@edk2.groups.io", "EDK2's"),
         ("psirt@example.org", "example.org's"),
-        ("134c704f-9b21-4f2e-91b3-4a467353bcc0", "the reporting organisation's"),
+        ("134c704f-9b21-4f2e-91b3-4a467353bcc0", "CISA's"),
+        ("416baaa9-dc9f-4396-8d5f-8c081fb06d67", "kernel.org's"),
+        ("6b3ad84c-e1a6-4bf7-a703-f496b71e49db", "the reporting organisation's"),
         ("", "the reporting organisation's"),
         ("x@notgitlab.com", "notgitlab.com's"),
     ],
@@ -318,8 +320,6 @@ def test_schema_4_moves_up_with_its_decisions_and_their_ids(tmp_path):
             " decided_by) VALUES ('t', '[\"CVE-2026-1\"]', 'judge', '[\"x\"]', ?, 'why', 'jch')",
             (verdict,),
         )
-    db.execute("DELETE FROM sqlite_sequence")  # ids must carry on all the same
-    db.execute("INSERT INTO sqlite_sequence (name, seq) VALUES ('decision', 7)")
     db.commit()
     db.close()
     s = Store(path)
@@ -339,7 +339,8 @@ def test_schema_4_moves_up_with_its_decisions_and_their_ids(tmp_path):
         s.db.execute(insert, ("reject", ""))
     with pytest.raises(sqlite3.IntegrityError):
         s.db.execute(insert, ("approve", "x" * 1001))
-    assert max(r[0] for r in s.db.execute("SELECT id FROM decision")) >= 3
+    # ids carry on from the highest kept (decisions are never removed, so no id is reused)
+    assert max(r[0] for r in s.db.execute("SELECT id FROM decision")) == 3
     cols = {r[1] for r in s.db.execute("PRAGMA table_info(nvd)")}
     assert "cvss" in cols
     cols = {r[1] for r in s.db.execute("PRAGMA table_info(vendor_cve)")}
@@ -390,7 +391,7 @@ def test_moving_up_fills_the_new_columns_from_kept_pages(tmp_path, capsys):
     db.commit()
     db.close()
     assert cli.main(["--home", str(home), "candidates", "add", B, "--note", "x"]) == 0
-    assert "store upgraded from schema 4" in capsys.readouterr().out
+    assert "store filled for schema 5" in capsys.readouterr().out
     s = Store(home / "drafter.sqlite3", read_only=True)
     assert json.loads(s.db.execute("SELECT cvss FROM nvd").fetchone()[0])["score"] == 9.8
     row = s.db.execute("SELECT title, statement FROM vendor_cve").fetchone()
@@ -430,12 +431,27 @@ def test_a_new_store_fills_nothing(tmp_path):
 
 
 def _clone(tmp_path, packs_yaml="", pack_files=None):
+    """A packs clone. Each index line naming a pack file gets that file's real hash,
+    as a release writes it."""
+    import hashlib
+    import re
+
     root = tmp_path / "packs-clone"
     (root / "packs").mkdir(parents=True)
-    (root / "index.yaml").write_text(f"format: 1\nserial: 1\npacks:\n{packs_yaml}withdrawn: []\n")
     for pack_id, text in (pack_files or {}).items():
         (root / "packs" / pack_id).mkdir()
         (root / "packs" / pack_id / "PACK.yaml").write_text(text)
+
+    def hashed(match):
+        line, pack_id = match[0], match[1]
+        if pack_id not in (pack_files or {}):
+            return line
+        sha = hashlib.sha256((pack_files[pack_id]).encode()).hexdigest()
+        line = re.sub(r', sha256: "[^"]*"', "", line)
+        return line.replace("}", f', sha256: "{sha}"}}')
+
+    packs_yaml = re.sub(r'.*id: "([^"]+)".*', hashed, packs_yaml)
+    (root / "index.yaml").write_text(f"format: 1\nserial: 1\npacks:\n{packs_yaml}withdrawn: []\n")
     return root
 
 
@@ -466,8 +482,13 @@ def test_packs_are_read_with_their_cves(tmp_path):
         ('  - {id: "a", version: "1"}\n', {}, "no version"),
         ('  - {id: "a", version: 1}\n', {}, "isn't there"),
         ('  - {id: "a", version: 1}\n', {"a": "id: b\ncves: [CVE-2026-1234]\n"}, "isn't the pack"),
-        ('  - {id: "a", version: 1}\n', {"a": "id: a\ncves: [CVE-26-1]\n"}, "no list of CVEs"),
-        ('  - {id: "a", version: 1}\n', {"a": "id: a\ncves: []\n"}, "no list of CVEs"),
+        ('  - {id: "a", version: 2}\n', {"a": "id: a\nversion: 1\n"}, "isn't the version"),
+        ('  - {id: "a", version: 1, sha256: "00"}\n', {}, "isn't there"),
+        (
+            '  - {id: "a", version: 1}\n',
+            {"a": "id: a\nversion: 1\ncves: [CVE-26-1]\n"},
+            "odd list of CVEs",
+        ),
         ('  - {id: "a", version: 1}\n', {"a": "id: a\n  cves: : ["}, "can't be read"),
         ("  - just-a-string\n", {}, "odd id"),
     ],
@@ -494,3 +515,137 @@ def test_a_clone_with_no_index_is_refused(tmp_path):
     (tmp_path / "index.yaml").write_text("- a list\n")
     with pytest.raises(packs.PackError, match="no list of packs"):
         packs.load(tmp_path)
+
+
+# from the first review of A.4b
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "id: a\npublished: 2026-02-30\ncves: [CVE-2026-1234]\n",
+        "id: a\ncves: [CVE-2026-1234]\nx: " + "[" * 5000 + "]" * 5000 + "\n",
+    ],
+)
+def test_a_date_that_isnt_one_or_deep_nesting_is_refused_not_raised(tmp_path, text):
+    root = _clone(tmp_path, '  - {id: "a", version: 1}\n', {"a": text})
+    with pytest.raises(packs.PackError, match="can't be read"):
+        packs.load(root)
+
+
+def test_a_40_vector_with_provider_urgency_is_kept():
+    vector = V4 + "/U:Amber"
+    got = nvd.cvss(_metrics(cvssMetricV40=[("x@example.org", "Secondary", vector, 9.2)]))
+    assert json.loads(got)["vector"] == vector
+    assert cards.reach_words(vector) == (
+        "Over the network, no login, no user action, only under certain conditions"
+    )
+
+
+def test_a_fill_cut_short_is_done_again_by_the_next_open(tmp_path, monkeypatch):
+    path = tmp_path / "drafter.sqlite3"
+    db = _schema4(path)
+    db.execute(
+        "INSERT INTO fetches (id, feed, url, fetched_at, status, body) VALUES"
+        " (1, 'nvd', 'p', 't', 200, ?)",
+        (gzip.compress(_nvd_page(A)),),
+    )
+    db.execute("INSERT INTO nvd (cve, last_modified, fetch_id) VALUES (?, 't', 1)", (A,))
+    db.commit()
+    db.close()
+
+    def busy(store):
+        raise sqlite3.OperationalError("database is locked")
+
+    s = Store(path)
+    with monkeypatch.context() as m:
+        m.setattr(nvd, "reparse_products", busy)
+        with pytest.raises(sqlite3.OperationalError):
+            upgrade.fill(s)
+    s.close()
+    s = Store(path)  # already schema 5: the move doesn't happen again, the fill does
+    assert s.migrated_from is None
+    assert "schema 5" in upgrade.fill(s)
+    assert s.db.execute("SELECT cvss FROM nvd").fetchone()[0] is not None
+    assert upgrade.fill(s) is None
+    s.close()
+
+
+def test_an_early_vendor_cve_table_keeps_schema_5s_columns(tmp_path):
+    path = tmp_path / "early.sqlite3"
+    s = Store(path)
+    s.db.execute("DELETE FROM refill")
+    s.db.execute("DROP TABLE vendor_cve")
+    s.db.execute(
+        "CREATE TABLE vendor_cve (cve TEXT NOT NULL, vendor TEXT NOT NULL, checked_at TEXT,"
+        " found INTEGER, published TEXT, packages TEXT NOT NULL, fetch_id INTEGER,"
+        " PRIMARY KEY (cve, vendor))"
+    )
+    s.close()
+    s = Store(path)
+    cols = {r[1] for r in s.db.execute("PRAGMA table_info(vendor_cve)")}
+    assert {"attempted_at", "title", "statement"} <= cols
+    assert upgrade.fill(s) is not None  # owed again, for the rebuilt table
+    s.close()
+
+
+@pytest.mark.parametrize(
+    ("text", "message"),
+    [
+        (
+            "id: a\nversion: 1\nl0: &l0 {x: 1}\nl1: &l1 {<<: [*l0, *l0]}\ncves: []\n",
+            "anchors and aliases",
+        ),
+        ("id: a\nversion: 1\nx: " + "[" * 40 + "]" * 40 + "\n", "nested too deep"),
+        ("id: a\nversion: 1\nx: !!timestamp nope\n", "can't be read"),
+        ("id: a\nversion: 1\nx: !!python/object:os.system {}\n", "can't be read"),
+    ],
+)
+def test_hostile_yaml_is_refused_before_it_is_built(tmp_path, text, message):
+    root = _clone(tmp_path, '  - {id: "a", version: 1}\n', {"a": text})
+    with pytest.raises(packs.PackError, match=message):
+        packs.load(root)
+
+
+def test_a_pack_edited_since_it_was_signed_doesnt_count(tmp_path):
+    root = _clone(
+        tmp_path,
+        '  - {id: "php2shell-2026-10", version: 1}\n',
+        {"php2shell-2026-10": PHP_PACK},
+    )
+    (root / "packs" / "php2shell-2026-10" / "PACK.yaml").write_text(
+        PHP_PACK.replace("]", ", CVE-2026-114406]")
+    )
+    with pytest.raises(packs.PackError, match="isn't the file index.yaml signed"):
+        packs.load(root)
+
+
+def test_a_pack_naming_no_cves_is_read_and_covers_nothing(tmp_path):
+    root = _clone(
+        tmp_path,
+        '  - {id: "a", version: 1}\n  - {id: "php2shell-2026-10", version: 1}\n',
+        {"a": "id: a\nversion: 1\n", "php2shell-2026-10": PHP_PACK},
+    )
+    got = packs.load(root)
+    assert [p.id for p in got] == ["a", "php2shell-2026-10"] and got[0].cves == frozenset()
+    assert [c.pack.id for c in packs.covers(got, ["CVE-2026-109618"])] == ["php2shell-2026-10"]
+
+
+def test_cisas_added_score_comes_after_the_reporters():
+    cisa = ("134c704f-9b21-4f2e-91b3-4a467353bcc0", "Secondary", NET, 7.5)
+    apache = ("security@apache.org", "Secondary", V4, 9.2)
+    got = json.loads(nvd.cvss(_metrics(cvssMetricV31=[cisa], cvssMetricV40=[apache])))
+    assert got["source"] == "security@apache.org"
+    only = json.loads(nvd.cvss(_metrics(cvssMetricV31=[cisa])))
+    assert cards.whose(only["source"]) == "CISA's"
+
+
+def test_shown_text_loses_control_and_bidi_characters():
+    assert cards.clean("ok\u202e reversed\x1b[31m\n x") == "ok reversed [31m x"
+    assert cards.clean(None) is None and cards.clean("\u202e") is None
+
+
+def test_a_cut_doesnt_lose_a_long_run_without_spaces():
+    text = "Statement " + "x" * 2000
+    got = cards._cut(text)
+    assert got.startswith("Statement xxx") and len(got) == cards.WORDS_CUT + 2

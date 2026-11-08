@@ -168,6 +168,10 @@ BEGIN SELECT RAISE(ABORT, 'decisions are append-only'); END;
 ALTER TABLE nvd ADD COLUMN cvss TEXT;
 ALTER TABLE vendor_cve ADD COLUMN title TEXT;
 ALTER TABLE vendor_cve ADD COLUMN statement TEXT;
+-- Filling them takes about a minute and runs after the move, so it is marked as
+-- owed here and cleared when done: one cut short is done again by the next open.
+CREATE TABLE refill (schema INTEGER PRIMARY KEY);
+INSERT INTO refill (schema) VALUES (5);
 
 -- A.4b: an approve may go without a reason (a reject still needs one), and each
 -- decision keeps the signs of attacks it was made with ("kev:CVE-…", JSON), so a
@@ -284,6 +288,9 @@ class Store:
                 self.db.execute("ROLLBACK")
             raise
         self.migrated_from = version
+        if version == 0:  # a new store: nothing kept yet to fill from
+            with self.transaction():
+                self.db.execute("DELETE FROM refill")
         self._ensure_columns()  # a store from early in schema 2 lacks two columns
 
     def _ensure_columns(self) -> None:
@@ -301,7 +308,8 @@ class Store:
             with self.transaction():
                 for sql in missing:
                     self.db.execute(sql)
-            self.migrated_from = 1  # so the caller fills them, as after an upgrade
+                self.db.execute("INSERT OR IGNORE INTO refill (schema) VALUES (2)")
+            self.migrated_from = 1
         runs = {row[1] for row in self.db.execute("PRAGMA table_info(propose_run)")}
         if runs and "token" not in runs:
             # Early schema 3: its runs have no token, so none of them vouches for a file.
@@ -315,6 +323,17 @@ class Store:
             with self.transaction():
                 self.db.execute("DROP TABLE vendor_cve")
                 self.db.execute(f"CREATE TABLE vendor_cve{create});")
+        # Schema 5's columns, on a table rebuilt from the early shape above.
+        for table, column in (
+            ("nvd", "cvss"),
+            ("vendor_cve", "title"),
+            ("vendor_cve", "statement"),
+        ):
+            have = {row[1] for row in self.db.execute(f"PRAGMA table_info({table})")}
+            if have and column not in have:
+                with self.transaction():
+                    self.db.execute(f"ALTER TABLE {table} ADD COLUMN {column} TEXT")
+                    self.db.execute("INSERT OR IGNORE INTO refill (schema) VALUES (5)")
 
     @contextlib.contextmanager
     def transaction(self) -> Iterator[sqlite3.Connection]:
