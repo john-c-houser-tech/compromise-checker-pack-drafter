@@ -22,6 +22,8 @@ is by hand, and the pull request is a person's.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import datetime as dt
 import difflib
 import hashlib
@@ -31,7 +33,8 @@ import re
 import shutil
 import subprocess
 import tomllib
-from dataclasses import dataclass
+import unicodedata
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -64,7 +67,13 @@ class Assembly:
     window_start: dt.datetime
     likelihood_ratio: float
     binaries: list[str]
-    packages_from: list[str] | None = None  # CVEs whose vendor data: default the pack's
+    # Per family (ubuntu, rhel): CVEs whose vendor data stand in for the pack's own on
+    # that family's releases, with the person's reason (the Java case: RHEL is fixed by
+    # the ca-certificates update, while Ubuntu's own records for the CVE still count).
+    packages_from: dict[str, list[str]] | None = None
+    packages_from_reason: str = ""
+    by_hand: list[fill.Entry] = field(default_factory=list)  # a person's own entries
+    gaps_accepted: str = ""  # why what the vendor data couldn't settle is acceptable
     first_seen_in_wild: dt.datetime | None = None
     window_end: dt.datetime | None = None
     other_builds: str = "cant_judge"
@@ -83,6 +92,48 @@ def _when(value: Any, name: str) -> dt.datetime:
     return when.astimezone(dt.UTC)
 
 
+FAMILIES = {"ubuntu": ("ubuntu", "sury"), "rhel": ("redhat", "alma", "remi")}  # by fill origin
+_VENDOR_OF = {"ubuntu": "ubuntu", "rhel": "redhat"}
+
+
+def _printable(text: str, name: str) -> str:
+    """Text that goes into the signed pack's comments: one line, nothing hidden."""
+    if any(not ch.isprintable() or unicodedata.category(ch) == "Cf" for ch in text):
+        raise AssembleError(f"{name} holds a hidden or control character")
+    return text
+
+
+def _by_hand(item: Any) -> fill.Entry:
+    """A package entry a person writes: what the vendor data couldn't (a release Red
+    Hat calls affected with no fixed build to take binary names from, say)."""
+    keys = {"release", "binary_names", "versions", "fixed", "source", "note"}
+    if not isinstance(item, dict) or set(item) - keys or not {"release", "binary_names",
+                                                               "source"} <= set(item):  # fmt: skip
+        raise AssembleError(
+            "exposure.by_hand: each entry has release, binary_names and source, and may have"
+            " versions, fixed (none: no fix yet) and note"
+        )
+    release = item["release"]
+    if not isinstance(release, str) or not re.fullmatch(r"(ubuntu|rhel):[\d.]+", release):
+        raise AssembleError(f"exposure.by_hand: release like ubuntu:24.04 or rhel:9: {release!r}")
+    names = item["binary_names"]
+    if not isinstance(names, list) or not names or not all(isinstance(n, str) for n in names):
+        raise AssembleError("exposure.by_hand: binary_names is a list of names")
+    for key in ("versions", "fixed", "source", "note"):
+        if key in item and not isinstance(item[key], str):
+            raise AssembleError(f"exposure.by_hand: {key} is text")
+    note = _printable(" ".join(str(item.get("note", "")).split()), "by_hand note")
+    return fill.Entry(
+        release,
+        list(names),
+        item.get("versions"),
+        item.get("fixed"),
+        item["source"],
+        "byhand",
+        f"added by a person{': ' + note if note else ''}",
+    )
+
+
 def read_assembly(path: Path) -> Assembly:
     text = Path(path).read_text(encoding="utf-8")
     try:
@@ -95,7 +146,8 @@ def read_assembly(path: Path) -> Assembly:
     known_top = {"id", "version", "draft", "reviewed_by", "exposure"}
     known_exp = {
         "window_start", "first_seen_in_wild", "window_end", "likelihood_ratio", "binaries",
-        "packages_from", "other_builds", "thirdparty", "stale_code",
+        "packages_from", "packages_from_reason", "other_builds", "thirdparty", "stale_code",
+        "by_hand", "gaps_accepted",
     }  # fmt: skip
     odd = sorted(set(data) - known_top) + sorted(f"exposure.{k}" for k in set(exposure) - known_exp)
     if odd:
@@ -120,11 +172,23 @@ def read_assembly(path: Path) -> Assembly:
         raise AssembleError("exposure.binaries: the binary filter, a list of globs ([] for none)")
     packages_from = exposure.get("packages_from")
     if packages_from is not None and (
-        not isinstance(packages_from, list)
+        not isinstance(packages_from, dict)
         or not packages_from
-        or not all(isinstance(c, str) and CVE_ID.match(c) for c in packages_from)
+        or set(packages_from) - set(FAMILIES)
+        or not all(
+            isinstance(v, list) and v and all(isinstance(c, str) and CVE_ID.match(c) for c in v)
+            for v in packages_from.values()
+        )
     ):
-        raise AssembleError("exposure.packages_from: CVE numbers whose vendor data to use")
+        raise AssembleError(
+            "exposure.packages_from: per family, the CVEs whose vendor data stand in,"
+            ' like {rhel = ["CVE-2026-114406"]}'
+        )
+    reason = exposure.get("packages_from_reason", "")
+    if packages_from and (not isinstance(reason, str) or not reason.strip()):
+        raise AssembleError(
+            "exposure.packages_from_reason: why, in a sentence (it goes in the pack)"
+        )
     stale = exposure.get("stale_code")
     if stale is not None and (
         not isinstance(stale, list) or not all(isinstance(p, str) for p in stale)
@@ -136,17 +200,28 @@ def read_assembly(path: Path) -> Assembly:
     other = exposure.get("other_builds", "cant_judge")
     if other not in fill.OTHER_BUILDS:
         raise AssembleError(f"exposure.other_builds is one of {', '.join(fill.OTHER_BUILDS)}")
+    by_hand = []
+    for item in exposure.get("by_hand") or []:
+        by_hand.append(_by_hand(item))
+    gaps = exposure.get("gaps_accepted", "")
+    if not isinstance(gaps, str):
+        raise AssembleError("exposure.gaps_accepted: why the gaps are acceptable, in a sentence")
     if "window_start" not in exposure:
         raise AssembleError("exposure.window_start: when the threat became usable")
     return Assembly(
         id=pack_id,
         version=version,
         draft=Path(os.path.expanduser(draft_path)),
-        reviewed_by=" ".join(reviewed.split()),
+        reviewed_by=_printable(" ".join(reviewed.split()), "reviewed_by"),
         window_start=_when(exposure["window_start"], "exposure.window_start"),
         likelihood_ratio=float(lr),
         binaries=list(binaries),
-        packages_from=sorted(set(packages_from)) if packages_from else None,
+        packages_from=(
+            {f: sorted(set(c)) for f, c in packages_from.items()} if packages_from else None
+        ),
+        packages_from_reason=_printable(" ".join(str(reason).split()), "packages_from_reason"),
+        by_hand=by_hand,
+        gaps_accepted=_printable(" ".join(gaps.split()), "gaps_accepted"),
         first_seen_in_wild=(
             _when(exposure["first_seen_in_wild"], "exposure.first_seen_in_wild")
             if "first_seen_in_wild" in exposure
@@ -172,9 +247,13 @@ class Reviewed:
     cves: list[str]
     parts: dict[str, Any]  # title, mitigations, detections, remediation, references
     sha256: str
+    decision_id: int | None = None  # the approve it was drafted under
 
 
-_CVES_LINE = re.compile(r"^# CVEs: ((?:CVE-\d{4}-\d{4,9}(?:, )?)+)", re.M)
+_CVES_LINE = re.compile(
+    r"^# CVEs: ((?:CVE-\d{4}-\d{4,9}(?:, )?)+)(?: \(approved [^,]*, decision (\d+)\))?", re.M
+)
+PARTS = ("title", "mitigations", "detections", "remediation", "references")
 
 
 def read_draft(path: Path) -> Reviewed:
@@ -196,10 +275,44 @@ def read_draft(path: Path) -> Reviewed:
         parts = packformat.load(data)
     except packformat.PackError as exc:
         raise AssembleError(f"{path}: {exc}") from None
-    want = {"title", "mitigations", "detections", "remediation", "references"}
+    want = set(PARTS)
     if not isinstance(parts, dict) or set(parts) != want:
         raise AssembleError(f"{path} should hold just: {', '.join(sorted(want))}")
-    return Reviewed(found.group(1).split(", "), parts, hashlib.sha256(data).hexdigest())
+    return Reviewed(
+        found.group(1).split(", "),
+        parts,
+        hashlib.sha256(data).hexdigest(),
+        int(found.group(2)) if found.group(2) else None,
+    )
+
+
+def edited(store: Store, reviewed: Reviewed, decision_id: int) -> list[str] | None:
+    """The parts a person changed from the AI's last accepted answer for this approve,
+    or None if no such answer is on record."""
+    row = store.db.execute(
+        "SELECT answer FROM ai_request WHERE decision_id = ? AND settled = 1"
+        " AND problems = '[]' AND answer IS NOT NULL ORDER BY id DESC LIMIT 1",
+        (decision_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    try:
+        answer = json.loads(row[0])
+        ai = {
+            "title": answer["title"],
+            "mitigations": packformat.load(str(answer["mitigations_yaml"]).encode()) or [],
+            "detections": packformat.load(str(answer["detections_yaml"]).encode()) or [],
+            "remediation": answer["remediation"],
+            "references": answer["references"],
+        }
+    except (ValueError, KeyError, TypeError, packformat.PackError):
+        return None
+    return [k for k in PARTS if _plain(ai[k]) != _plain(reviewed.parts[k])]
+
+
+def _plain(value: Any) -> Any:
+    """For comparing what the AI wrote with the draft file: YAML's own types aside."""
+    return json.loads(json.dumps(value, default=str))
 
 
 # the packs clone
@@ -234,13 +347,33 @@ def listed_version(clone: Path, pack_id: str) -> int | None:
     return None
 
 
+BASE_BRANCH = "dev"  # pack pull requests go into dev (John merges)
+
+
 def _clone(path: Path) -> Path:
     clone = Path(os.path.expanduser(path)).resolve()
     if not (clone / "index.yaml").is_file() or not (clone / "keys.yaml").is_file():
         raise AssembleError(f"{clone} isn't a clone of the packs repository (no index.yaml)")
     if _git(clone, "status", "--porcelain").strip():
         raise AssembleError(f"{clone} has changes not committed: start from a clean clone")
+    branch = _git(clone, "branch", "--show-current").strip()
+    if branch != BASE_BRANCH:
+        raise AssembleError(
+            f"{clone} is on {branch or 'no branch'}: a pack starts from {BASE_BRANCH}, pulled"
+            f" (git switch {BASE_BRANCH} && git pull)"
+        )
     return clone
+
+
+def withdrawn(clone: Path) -> set[str]:
+    try:
+        index = packformat.load((clone / "index.yaml").read_bytes())
+    except (OSError, packformat.PackError) as exc:
+        raise AssembleError(f"{clone}/index.yaml can't be read: {exc}") from None
+    out = set()
+    for item in (index or {}).get("withdrawn") or []:
+        out.add(item.get("id") if isinstance(item, dict) else item)
+    return out
 
 
 # writing the pack
@@ -254,6 +387,10 @@ class Written:
     diff: str
     report: str
     notes: list[str]
+    base: str = ""
+    replaced: list[str] = field(default_factory=list)  # packages_from, said plainly
+    needs_a_person: list[str] = field(default_factory=list)
+    edits: list[str] | None = None  # parts changed from the AI's answer; None: unknown
 
 
 def _yaml(value: Any) -> str:
@@ -264,15 +401,33 @@ def _iso(when: dt.datetime) -> str:
     return when.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def compose(a: Assembly, reviewed: Reviewed, filled: fill.Draft, published: dt.date) -> str:
+def compose(
+    a: Assembly,
+    reviewed: Reviewed,
+    filled: fill.Draft,
+    published: dt.date,
+    edits: list[str] | None = None,
+) -> str:
     """The pack's text: where each part came from, as comments, then the pack."""
-    from_cves = a.packages_from or reviewed.cves
+    if edits is None:
+        how = "an AI draft (no accepted AI answer on record to compare it with)"
+    elif edits:
+        how = f"an AI draft, edited by a person ({', '.join(edits)})"
+    else:
+        how = "an AI draft, unedited"
     lines = [
         f"# {reviewed.parts['title']}"[:200],
         "# Assembled by the pack drafter (A.7). Where each part came from:",
-        f"#   prose (title, mitigations, detections, remediation, references): an AI draft,"
+        f"#   prose (title, mitigations, detections, remediation, references): {how},"
         f" read and accepted by {a.reviewed_by} (draft sha256 {reviewed.sha256[:16]})",
-        f"#   packages: vendor data for {', '.join(from_cves)} (`drafter fill`)",
+        f"#   packages: vendor data for {', '.join(reviewed.cves)} (`drafter fill`)",
+    ]
+    for family, cves in (a.packages_from or {}).items():
+        lines.append(
+            f"#     except {family}: from {', '.join(cves)} instead, because"
+            f" {a.packages_from_reason}"[:400]
+        )
+    lines += [
         "#   id, version, window, weight, binary filter: the person's assembly file",
         "format: 1",
         f"id: {a.id}",
@@ -287,7 +442,8 @@ def compose(a: Assembly, reviewed: Reviewed, filled: fill.Draft, published: dt.d
         lines.append(f"  first_seen_in_wild: {_iso(a.first_seen_in_wild)}")
     if a.window_end:
         lines.append(f"  window_end: {_iso(a.window_end)}")
-    lines.append(f"  likelihood_ratio: {a.likelihood_ratio:g}")
+    lr = a.likelihood_ratio
+    lines.append(f"  likelihood_ratio: {int(lr) if lr.is_integer() else repr(lr)}")
     # fill's own header (unreviewed, unsigned) is for its draft, not this pack
     lines += [ln for ln in fill.render_yaml(filled).rstrip("\n").splitlines() if ln.startswith(" ")]
     if a.stale_code:
@@ -316,12 +472,137 @@ def check_text(text: str, reviewed: Reviewed, found: list[drafting.Source]) -> l
         raise AssembleError("the pack can't be assembled:\n" + "\n".join(problems))
     sources = [(s.name, s.said) for s in found]
     notes = []
+    said = "\n".join(textcheck.plain(t).lower() for _, t in sources)
+    for m in reviewed.parts.get("mitigations") or []:
+        name = (m.get("setting") or {}).get("name") if isinstance(m, dict) else None
+        if isinstance(name, str) and not re.search(
+            rf"(?<![\w.-]){re.escape(name.lower())}(?![\w-]|\.\w)", said
+        ):
+            notes.append(f"setting {name!r}: in no source (a person's own?)")
     for finding in textcheck.look_up(textcheck.literals(prose), sources):
         lit = finding.literal
         if finding.sources:
             notes.append(f"{lit.kind} {lit.text!r}: from {'; '.join(finding.sources)}")
         else:
             notes.append(f"{lit.kind} {lit.text!r}: in no source (a person's own?)")
+    return notes
+
+
+def _family(entry: fill.Entry) -> str:
+    if entry.origin == "byhand":
+        return entry.release.split(":", 1)[0]
+    return next(f for f, origins in FAMILIES.items() if entry.origin in origins)
+
+
+def _packages(
+    store: Store, ctx: Any, a: Assembly, reviewed: Reviewed
+) -> tuple[fill.Draft, list[str]]:
+    """The packages: the pack's own CVEs' vendor data, with a family's replaced by
+    another CVE's where the person says so (and said plainly)."""
+    extra, unconfirmed, problems = [], 0, []
+    if a.thirdparty:
+        from drafter import thirdparty
+
+        extra, unconfirmed, problems = thirdparty.confirmed_entries(
+            a.thirdparty.read_text(encoding="utf-8"), reviewed.cves, store
+        )
+    try:
+        filled = fill.build(ctx, reviewed.cves, a.binaries, a.other_builds, extra, unconfirmed)
+    except fill.FillError as exc:
+        raise AssembleError(f"fill: {exc}") from None
+    filled.conflicts += problems
+    replaced = []
+    for family, cves in (a.packages_from or {}).items():
+        vendor = _VENDOR_OF[family]
+        marks = ", ".join("?" for _ in cves)
+        have = {
+            r[0]
+            for r in store.db.execute(
+                f"SELECT cve FROM vendor_cve WHERE vendor = ? AND found = 1 AND cve IN ({marks})",  # noqa: S608
+                [vendor, *cves],
+            )
+        }
+        missing = [c for c in cves if c not in have]
+        if missing:
+            raise AssembleError(
+                f"packages_from {family}: {vendor} has no record in the store for"
+                f" {', '.join(missing)}: check the CVE number"
+            )
+        try:
+            other = fill.build(ctx, cves, a.binaries, a.other_builds)
+        except fill.FillError as exc:
+            raise AssembleError(f"fill ({', '.join(cves)}): {exc}") from None
+        own = [e for e in filled.entries if _family(e) == family]
+        theirs = [e for e in other.entries if _family(e) == family]
+        filled.entries = [e for e in filled.entries if _family(e) != family] + theirs
+        filled.conflicts += [f"{', '.join(cves)}: {c}" for c in other.conflicts]
+        names = sorted({n for e in theirs for n in e.binary_names})
+        dropped = sorted({n for e in own for n in e.binary_names})
+        replaced.append(
+            f"{family}: {len(theirs)} entries from {', '.join(cves)} ({', '.join(names)[:200]})"
+            f" stand in for the pack's own {len(own)} ({', '.join(dropped)[:200] or 'none'}),"
+            f" because {a.packages_from_reason}"
+        )
+    filled.entries += a.by_hand
+    if a.by_hand:
+        fill._merge(filled)  # a person's entry clashing with the vendors' is reported
+    if ctx is not None and not a.thirdparty:
+        from drafter import thirdparty
+
+        for cpe in thirdparty.has_repositories(ctx, reviewed.cves):
+            filled.conflicts.append(
+                f"{cpe} has third-party builds (thirdparty.toml): without a confirmed proposals"
+                " file (thirdparty, from `drafter propose`) a host on one reads not affected"
+            )
+        for cve in thirdparty.unknown_cves(ctx, reviewed.cves):
+            filled.conflicts.append(
+                f"{cve}: no NVD or CISA row in the store, so whether it touches a third-party"
+                " build can't be told"
+            )
+    order = {"ubuntu": 0, "sury": 1, "redhat": 2, "alma": 3, "remi": 4, "byhand": 5}
+    filled.entries.sort(key=lambda e: (order[e.origin], e.release, e.versions or "", e.fixed or ""))
+    return filled, replaced
+
+
+PLACEHOLDER = "https://invalid.example/"
+
+
+def _current(clone: Path) -> str:
+    """Whether dev is GitHub's dev, as far as a fetch can tell (no token: read only)."""
+    try:
+        _git(clone, "fetch", "--quiet", "origin", BASE_BRANCH)
+    except AssembleError as exc:
+        return f"couldn't check {BASE_BRANCH} is current ({exc})"
+    behind = _git(clone, "rev-list", "--count", f"HEAD..origin/{BASE_BRANCH}").strip()
+    if behind != "0":
+        raise AssembleError(
+            f"{clone} is {behind} commit(s) behind origin/{BASE_BRANCH}: git pull first"
+        )
+    return ""
+
+
+def _undo(clone: Path, branch: str, target: Path, existed: bool) -> None:
+    """A write that failed half way: back to dev, without the branch or the file."""
+    try:
+        if target.exists():
+            target.chmod(0o644)
+        _git(clone, "checkout", "--", ".") if existed else (target.unlink(missing_ok=True))
+        _git(clone, "switch", BASE_BRANCH)
+        _git(clone, "branch", "-D", branch)
+    except (AssembleError, OSError):
+        pass  # the original error says more; the clone shows the rest
+
+
+def _reference_notes(references: list, found: list[drafting.Source]) -> list[str]:
+    known = frozenset().union(*(s.urls for s in found)) if found else frozenset()
+    notes = []
+    for url in references if isinstance(references, list) else []:
+        if not isinstance(url, str):
+            continue
+        if url not in known:
+            notes.append(f"reference {url}: in no source (a person's own?)")
+        elif not textcheck.known_site(url):
+            notes.append(f"reference on {textcheck.site(url)}, not a usual advisory site: {url}")
     return notes
 
 
@@ -336,6 +617,13 @@ def write(
     clone = _clone(clone_path)
     reviewed = read_draft(a.draft)
     decision = drafting.approved(store, reviewed.cves)
+    if reviewed.decision_id is not None and reviewed.decision_id != decision.id:
+        raise AssembleError(
+            f"the draft was made under decision {reviewed.decision_id}; the threat was decided"
+            f" again since (decision {decision.id}): draft it again"
+        )
+    if a.id in withdrawn(clone):
+        raise AssembleError(f"{a.id} was withdrawn: a pack after it takes a new id")
     listed = listed_version(clone, a.id)
     expected = (listed or 0) + 1
     if a.version != expected:
@@ -347,44 +635,52 @@ def write(
     target = clone / "packs" / a.id / "PACK.yaml"
     if listed is None and target.exists():
         raise AssembleError(f"{target} is there but the index doesn't list it: settle that first")
-    extra, unconfirmed, problems = [], 0, []
-    if a.thirdparty:
-        from drafter import thirdparty
-
-        extra, unconfirmed, problems = thirdparty.confirmed_entries(
-            a.thirdparty.read_text(encoding="utf-8"), reviewed.cves, store
-        )
-    try:
-        filled = fill.build(
-            ctx, a.packages_from or reviewed.cves, a.binaries, a.other_builds, extra, unconfirmed
-        )
-    except fill.FillError as exc:
-        raise AssembleError(f"fill: {exc}") from None
-    filled.conflicts += problems
+    filled, replaced = _packages(store, ctx, a, reviewed)
     if not filled.entries:
         raise AssembleError("the vendor data gave no packages for this pack: check binaries")
-    published = now().date()
-    text = compose(a, reviewed, filled, published)
-    notes = check_text(text, reviewed, drafting.sources(store, reviewed.cves))
+    gaps = list(filled.conflicts) + list(filled.missing)
+    if gaps and not a.gaps_accepted:
+        raise AssembleError(
+            "the vendor data leaves these for a person; settle them (by_hand entries, the"
+            " binary filter, packages_from) or say why they're acceptable (gaps_accepted):\n  "
+            + "\n  ".join(gaps)
+        )
+    current = _current(clone)
+    edits = edited(store, reviewed, decision.id)
+    text = compose(a, reviewed, filled, now().date(), edits)
+    if PLACEHOLDER in text:
+        raise AssembleError(
+            "an entry's source isn't an address the pack can carry (fill wrote"
+            f" {PLACEHOLDER}): give it by hand"
+        )
+    found = drafting.sources(store, reviewed.cves)
+    notes = check_text(text, reviewed, found) + _reference_notes(
+        reviewed.parts["references"], found
+    )
     old = ""
     if listed is not None:
         old = _git(clone, "show", f"HEAD:packs/{a.id}/PACK.yaml")
+    base = _git(clone, "rev-parse", "--short", "HEAD").strip()
     branch = f"pack/{a.id}-v{a.version}"
     _git(clone, "switch", "-c", branch)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    if target.exists():
-        target.chmod(0o644)
-    target.write_text(text, encoding="utf-8")
-    target.chmod(0o444)  # frozen: nothing is to touch it between here and signing
-    sha = hashlib.sha256(text.encode("utf-8")).hexdigest()
-    with store.transaction():
-        store.db.execute(
-            "INSERT INTO pack_assembly (assembled_at, pack_id, version, path, sha256, cves,"
-            " decision_id, draft_sha256, reviewed_by, assembly) VALUES (?, ?, ?, ?, ?, ?, ?, ?,"
-            " ?, ?)",
-            (timeutil.fmt(now()), a.id, a.version, str(target), sha,
-             json.dumps(reviewed.cves), decision.id, reviewed.sha256, a.reviewed_by, a.text),
-        )  # fmt: skip
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.exists():
+            target.chmod(0o644)
+        target.write_text(text, encoding="utf-8")
+        target.chmod(0o444)  # frozen: nothing is to touch it between here and signing
+        sha = hashlib.sha256(target.read_bytes()).hexdigest()  # as it is on disk
+        with store.transaction():
+            store.db.execute(
+                "INSERT INTO pack_assembly (assembled_at, pack_id, version, path, sha256, cves,"
+                " decision_id, draft_sha256, reviewed_by, assembly) VALUES (?, ?, ?, ?, ?, ?, ?,"
+                " ?, ?, ?)",
+                (timeutil.fmt(now()), a.id, a.version, str(target), sha,
+                 json.dumps(reviewed.cves), decision.id, reviewed.sha256, a.reviewed_by, a.text),
+            )  # fmt: skip
+    except BaseException:
+        _undo(clone, branch, target, listed is not None)
+        raise
     diff = "".join(
         difflib.unified_diff(
             old.splitlines(keepends=True),
@@ -393,7 +689,20 @@ def write(
             f"{a.id} version {a.version}",
         )
     )
-    return Written(target, sha, branch, diff, fill.render_report(filled), notes)
+    return Written(
+        target,
+        sha,
+        branch,
+        diff,
+        fill.render_report(filled),
+        notes,
+        base=f"{BASE_BRANCH} at {base}",
+        replaced=replaced,
+        needs_a_person=gaps
+        + ([f"gaps accepted: {a.gaps_accepted}"] if gaps else [])
+        + ([current] if current else []),
+        edits=edits,
+    )
 
 
 def sign_command(w_path: Path, pack_id: str, version: int) -> str:
@@ -409,6 +718,7 @@ class Checked:
     key: str
     comment: str
     index_output: str
+    index: str = "written"  # written now; unsigned (written before, not signed); signed
 
 
 def _latest(store: Store, pack_id: str) -> dict:
@@ -432,6 +742,15 @@ def _pack_keys(clone: Path) -> list[str]:
     if not found:
         raise AssembleError("keys.yaml lists no pack keys")
     return found
+
+
+def key_id(public_key: str) -> str:
+    """minisign's id for a public key (as `minisign -V` and the key list show it)."""
+    try:
+        raw = base64.b64decode(public_key, validate=True)
+    except (ValueError, binascii.Error):
+        return "?"
+    return raw[2:10][::-1].hex().upper() if len(raw) == 42 else "?"
 
 
 def verify(path: Path, keys: list[str], minisign: str = "minisign") -> tuple[str, str]:
@@ -460,6 +779,21 @@ def verify(path: Path, keys: list[str], minisign: str = "minisign") -> tuple[str
     raise AssembleError(f"{path.name}.minisig isn't a good signature by any pack key in keys.yaml")
 
 
+def _indexed(clone: Path, pack_id: str, version: int, sha: str) -> bool:
+    """Does the clone's index already list this very pack (written for it before)?"""
+    try:
+        index = packformat.load((clone / "index.yaml").read_bytes())
+    except (OSError, packformat.PackError):
+        return False
+    return any(
+        isinstance(e, dict)
+        and e.get("id") == pack_id
+        and e.get("version") == version
+        and str(e.get("sha256", "")).lower() == sha
+        for e in (index or {}).get("packs") or []
+    )
+
+
 def check(
     store: Store,
     pack_id: str,
@@ -468,6 +802,9 @@ def check(
     checker: str = "checker",
     minisign: str = "minisign",
 ) -> Checked:
+    """The frozen file and its signature; then the index, written once: run again
+    after signing the index, it checks that signature instead of writing it anew
+    (which would undo the signing)."""
     clone = Path(os.path.expanduser(clone_path)).resolve()
     row = _latest(store, pack_id)
     path = Path(row["path"])
@@ -480,16 +817,28 @@ def check(
     if sha != row["sha256"]:
         raise AssembleError(
             f"{path} changed after it was frozen (sha256 {sha[:16]}, was {row['sha256'][:16]}):"
-            " assemble it again; never edit a pack after it is written"
+            " never edit a pack after it is written; to start again, delete its branch and"
+            " folder in the clone and run `drafter pack write` again"
         )
     if not Path(f"{path}.minisig").is_file():
         raise AssembleError(f"no {path.name}.minisig beside it: sign it first")
-    key, comment = verify(path, _pack_keys(clone), minisign)
+    keys = _pack_keys(clone)
+    key, comment = verify(path, keys, minisign)
     wanted = f"{pack_id} version {row['version']}"
     if comment != wanted:
         raise AssembleError(f"the signature's trusted comment is {comment!r}, not {wanted!r}")
+    index = clone / "index.yaml"
+    if _indexed(clone, pack_id, row["version"], sha):
+        try:
+            verify(index, keys, minisign)
+        except AssembleError:
+            return Checked(path, key, comment, "", index="unsigned")
+        return Checked(path, key, comment, "", index="signed")
     if shutil.which(checker) is None:
-        raise AssembleError(f"the checker ({checker}) isn't installed: it writes the index")
+        raise AssembleError(
+            f"the checker ({checker}) isn't installed or on PATH: give --checker"
+            " /path/to/checker; it writes the index"
+        )
     try:
         done = subprocess.run(  # noqa: S603 - the checker, with fixed arguments
             [checker, "packs", "index", str(clone)],
@@ -540,7 +889,7 @@ def template(store: Store, draft_path: Path, clone_path: Path) -> str:
         "# Every value is a person's choice; the store's suggestions are filled in.",
         f'id = "{pack_id}"',
         f"version = {(listed or 0) + 1}",
-        f'draft = "{reviewed_path(draft_path)}"',
+        f"draft = {json.dumps(reviewed_path(draft_path))}",
         'reviewed_by = ""  # who read the draft, edited it as needed, and stands by it',
         "",
         "[exposure]",
@@ -552,11 +901,13 @@ def template(store: Store, draft_path: Path, clone_path: Path) -> str:
         "# first_seen_in_wild = 2026-10-21T00:00:00Z",
         "# How much exposure weighs, more than 1 and at most 10 (PHP2Shell: 5).",
         "likelihood_ratio = 0",
-        "# Which binaries count (drafter fill --binaries): see `drafter fill` for the list.",
+        "# Which binaries count (drafter fill --binaries; [] keeps every one, often over the",
+        "# checker's 100 entries): `drafter fill CVE…` lists them.",
         "binaries = []",
         'other_builds = "cant_judge"',
-        "# A threat fixed in another package's update is judged from that package's data:",
-        f"# packages_from = {json.dumps(reviewed.cves)}",
+        "# A family whose releases are fixed in another CVE's update, judged from its data:",
+        '# packages_from = {rhel = ["CVE-…"]}',
+        '# packages_from_reason = "RHEL is fixed by the ca-certificates update"',
         '# thirdparty = "proposals.toml"',
         '# stale_code = ["program*"]  # programs to restart after the fix',
         f"# {len(signs)} source(s) about these CVEs in the store.",

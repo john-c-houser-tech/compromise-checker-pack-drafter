@@ -21,6 +21,7 @@ from tests.test_draft import CVE, _cve, _threat
 PACKS_INDEX = "format: 1\nserial: 1\nissued: 2026-10-31T05:12:15Z\npacks: []\nwithdrawn: []\n"
 KEYS = "format: 1\nserial: 1\nissued: 2026-10-30\npack_keys: []\nrevoked: []\n"
 
+OTHER = "CVE-2026-114406"
 DRAFT = f"""# AI DRAFT (A.5): written by an AI from the sources below. Review every line;
 # CVEs: {CVE} (approved 2026-11-08, decision 1)
 title: Google Brotli decoder out-of-bounds write ({CVE})
@@ -63,20 +64,43 @@ def ready(store, tmp_path, monkeypatch):
     draft.write_text(DRAFT)
     asked = []
 
+    def entry(release, name, versions, fixed, source, origin):
+        return fill.Entry(release, [name], versions, fixed, source, origin)
+
     def build(ctx, cves, filters, other_builds="cant_judge", thirdparty=None, unconfirmed=0):
         asked.append((list(cves), list(filters), other_builds))
         out = fill.Draft(cves=list(cves), binary_filter=list(filters), other_builds=other_builds)
-        out.entries.append(
-            fill.Entry(
+        if OTHER in cves:  # the ca-certificates CVE: RHEL only
+            out.entries.append(
+                entry(
+                    "rhel:9",
+                    "ca-certificates",
+                    None,
+                    "2026.2.1-90.el9_7",
+                    "https://access.redhat.com/errata/RHSA-2026:1",
+                    "redhat",
+                )
+            )
+            return out
+        out.entries += [
+            entry(
                 "ubuntu:24.04",
-                ["libbrotli1"],
+                "libbrotli1",
                 "1.1.0-2build2",
                 "1.1.0-2ubuntu0.1",
                 "https://ubuntu.com/security/notices/USN-8956-1",
                 "ubuntu",
-            )  # fmt: skip
-        )
-        return out
+            ),
+            entry(
+                "rhel:9",
+                "brotli",
+                None,
+                "1.0.9-7.el9_7.1",
+                "https://access.redhat.com/errata/RHSA-2026:2",
+                "redhat",
+            ),
+        ]
+        return out  # fmt: skip
 
     monkeypatch.setattr(fill, "build", build)
     return draft, asked
@@ -97,6 +121,9 @@ def _assembly(tmp_path, draft_path, **changes):
     }
     for key, value in changes.items():
         if key in exposure or key in ("first_seen_in_wild", "window_end", "packages_from",
+            "packages_from_reason",
+            "by_hand",
+            "gaps_accepted",
                                       "stale_code", "thirdparty"):  # fmt: skip
             if value is None:
                 exposure.pop(key, None)
@@ -151,12 +178,36 @@ def test_a_pack_is_written_frozen_on_its_own_branch(store, tmp_path, clone, read
     assert "Not reviewed, not signed" not in text  # fill's own header isn't carried over
 
 
-def test_the_pack_is_judged_from_the_cves_the_person_names(store, tmp_path, clone, ready):
+def test_a_familys_packages_come_from_the_cves_the_person_names(store, tmp_path, clone, ready):
     draft, asked = ready
-    done = _write(store, tmp_path, clone, draft, packages_from='["CVE-2026-114406"]')
-    assert asked[0][0] == ["CVE-2026-114406"]
+    _cve(store, OTHER)  # in the store, with Red Hat's record
+    done = _write(
+        store, tmp_path, clone, draft,
+        packages_from=f'{{rhel = ["{OTHER}"]}}',
+        packages_from_reason='"RHEL is fixed by the ca-certificates update"',
+    )  # fmt: skip
+    assert [c for c, _, _ in asked] == [[CVE], [OTHER]]
     text = done.path.read_text()
-    assert "vendor data for CVE-2026-114406" in text and f"cves: [{CVE}]" in text
+    assert '"libbrotli1"' in text and '"ca-certificates"' in text  # Ubuntu's own kept
+    assert 'binary_names: ["brotli"]' not in text  # RHEL's own replaced
+    assert f"except rhel: from {OTHER} instead, because RHEL is fixed by" in text
+    assert done.replaced == [
+        f"rhel: 1 entries from {OTHER} (ca-certificates) stand in for the pack's own 1 (brotli),"
+        " because RHEL is fixed by the ca-certificates update"
+    ]
+
+
+def test_packages_from_must_name_a_cve_the_store_has_and_say_why(store, tmp_path, clone, ready):
+    draft, _ = ready
+    with pytest.raises(assemble.AssembleError, match="packages_from_reason"):
+        _write(store, tmp_path, clone, draft, packages_from='{rhel = ["CVE-1999-0001"]}')
+    with pytest.raises(
+        assemble.AssembleError, match="redhat has no record in the store for CVE-1999"
+    ):
+        _write(store, tmp_path, clone, draft, packages_from='{rhel = ["CVE-1999-0001"]}',
+               packages_from_reason='"typo"')  # fmt: skip
+    with pytest.raises(assemble.AssembleError, match="per family"):
+        assemble.read_assembly(_assembly(tmp_path, draft, packages_from=f'["{OTHER}"]'))
 
 
 def test_optional_exposure_values(store, tmp_path, clone, ready):
@@ -285,7 +336,9 @@ def test_a_persons_edits_are_held_to_the_dangers_and_listed(store, tmp_path, clo
         ({"draft": None}, "draft: the reviewed draft"),
         ({"likelihood_ratio": '"5"'}, "likelihood_ratio"),
         ({"binaries": '"brotli"'}, "binaries"),
-        ({"packages_from": '["nope"]'}, "packages_from"),
+        ({"packages_from": '{rhel = ["nope"]}'}, "packages_from"),
+        ({"packages_from": '{debian = ["CVE-2026-1234"]}'}, "packages_from"),
+        ({"reviewed_by": '"jch\u202e"'}, "hidden or control character"),
         ({"stale_code": '"node"'}, "stale_code"),
         ({"other_builds": '"maybe"'}, "other_builds is one of"),
         ({"window_start": None}, "window_start"),
@@ -448,3 +501,288 @@ def test_a_pack_is_checked_in_the_clone_it_was_assembled_into(
     other.mkdir()
     with pytest.raises(assemble.AssembleError, match="was assembled into"):
         assemble.check(store, "brotli-2026-10", other)
+
+
+# from the release-safety review of A.7
+
+
+def test_the_clone_must_be_on_dev(store, tmp_path, clone, ready):
+    draft, _ = ready
+    _git(clone, "switch", "-q", "-c", "some-old-branch")
+    with pytest.raises(
+        assemble.AssembleError, match="is on some-old-branch: a pack starts from dev"
+    ):
+        _write(store, tmp_path, clone, draft)
+
+
+def test_a_withdrawn_id_isnt_used_again(store, tmp_path, clone, ready):
+    draft, _ = ready
+    (clone / "index.yaml").write_text(PACKS_INDEX.replace(
+        "withdrawn: []", 'withdrawn:\n  - {id: "brotli-2026-10", reason: "wrong", version: 1}'
+    ))  # fmt: skip
+    _git(clone, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qam", "withdraw")
+    with pytest.raises(assemble.AssembleError, match="was withdrawn"):
+        _write(store, tmp_path, clone, draft)
+
+
+def test_references_are_listed_when_no_source_gives_them(store, tmp_path, clone, ready):
+    draft, _ = ready
+    draft.write_text(DRAFT.replace(
+        f"- https://access.redhat.com/security/cve/{CVE}",
+        f"- https://access.redhat.com/security/cve/{CVE}\n- https://brotli-fix.example.net/get.sh",
+    ))  # fmt: skip
+    done = _write(store, tmp_path, clone, draft)
+    assert (
+        "reference https://brotli-fix.example.net/get.sh: in no source (a person's own?)"
+        in done.notes
+    )
+
+
+def _ai_answer(store, **changes):
+    import json
+
+    answer = {
+        "title": f"Google Brotli decoder out-of-bounds write ({CVE})",
+        "mitigations_yaml": "[]",
+        "detections_yaml": "- id: service-segfault\n  check: kernel.segfault\n"
+        "  counts: while_exposed\n  likelihood_ratio: 2\n",
+        "remediation": ["Update the system Brotli library and restart the services that use it."],
+        "references": [f"https://access.redhat.com/security/cve/{CVE}"],
+        "unknowns": [],
+        **changes,
+    }
+    decision = decisions.history(store)[0]
+    with store.transaction():
+        store.db.execute(
+            "INSERT INTO ai_request (sent_at, cves, decision_id, model, attempt, settled, cost,"
+            " answer, problems) VALUES ('t', '[]', ?, 'claude-opus-5-5', 1, 1, 0.1, ?, '[]')",
+            (decision.id, json.dumps(answer)),
+        )
+
+
+def _again(clone):
+    _git(clone, "switch", "-q", "dev")
+    _git(clone, "branch", "-q", "-D", "pack/brotli-2026-10-v1")
+    shutil.rmtree(clone / "packs" / "brotli-2026-10")
+
+
+def test_the_pack_says_whether_the_prose_was_edited(store, tmp_path, clone, ready):
+    draft, _ = ready
+    done = _write(store, tmp_path, clone, draft)
+    assert done.edits is None and "no accepted AI answer on record" in done.path.read_text()
+    _again(clone)
+    _ai_answer(store)
+    done = _write(store, tmp_path, clone, draft)
+    assert done.edits == [] and "an AI draft, unedited," in done.path.read_text()
+    _again(clone)
+    _ai_answer(store, remediation=["Something else entirely."])
+    done = _write(store, tmp_path, clone, draft)
+    assert done.edits == ["remediation"]
+    assert "an AI draft, edited by a person (remediation)," in done.path.read_text()
+
+
+def test_a_draft_made_under_an_earlier_decision_is_refused(store, tmp_path, clone, ready):
+    draft, _ = ready
+    draft.write_text(DRAFT.replace(f"# CVEs: {CVE} (approved 2026-11-08, decision 1)",
+                                   f"# CVEs: {CVE} (approved 2026-11-01, decision 7)"))  # fmt: skip
+    with pytest.raises(
+        assemble.AssembleError, match="made under decision 7; the threat was decided"
+    ):
+        _write(store, tmp_path, clone, draft)
+
+
+def test_the_index_is_written_once_and_its_signature_checked_after(
+    store, tmp_path, clone, ready, monkeypatch
+):
+    done = _signed(store, tmp_path, clone, ready, monkeypatch)
+    signed_index = {"ok": False}
+
+    def verify(path, keys, m="minisign"):
+        if path.name == "index.yaml" and not signed_index["ok"]:
+            raise assemble.AssembleError("not signed")
+        return "RWQ", "brotli-2026-10 version 1"
+
+    monkeypatch.setattr(assemble, "verify", verify)
+    calls = tmp_path / "calls"
+    index = (
+        "format: 1\\nserial: 2\\npacks:\\n  - {id: brotli-2026-10, version: 1, sha256: "
+        + done.sha256
+        + "}\\nwithdrawn: []\\n"
+    )
+    fake = tmp_path / "checker"
+    fake.write_text(
+        f"#!/bin/sh\necho run >> {calls}\nprintf '{index}' > $3/index.yaml\n"
+        "echo 'Wrote index.yaml: serial 2'\n"
+    )
+    fake.chmod(0o755)
+    first = assemble.check(store, "brotli-2026-10", clone, checker=str(fake))
+    assert first.index == "written" and calls.read_text().count("run") == 1
+    second = assemble.check(store, "brotli-2026-10", clone, checker=str(fake))
+    assert second.index == "unsigned" and calls.read_text().count("run") == 1  # not rewritten
+    signed_index["ok"] = True
+    third = assemble.check(store, "brotli-2026-10", clone, checker=str(fake))
+    assert third.index == "signed" and calls.read_text().count("run") == 1
+
+
+@pytest.mark.skipif(shutil.which("minisign") is None, reason="minisign isn't installed")
+def test_key_ids_are_minisigns_own(tmp_path):
+    pub, sec = str(tmp_path / "k.pub"), str(tmp_path / "k.key")
+    subprocess.run(["minisign", "-G", "-W", "-p", pub, "-s", sec], check=True, capture_output=True)  # noqa: S603, S607
+    comment, key = (tmp_path / "k.pub").read_text().splitlines()[:2]
+    assert assemble.key_id(key) == comment.rsplit(" ", 1)[1]
+    assert assemble.key_id("not base64!") == "?"
+
+
+def test_the_template_quotes_its_path(store, tmp_path, clone, ready):
+    draft, _ = ready
+    odd = tmp_path / 'we"ird\\dir'
+    odd.mkdir()
+    moved = odd / "d.yaml"
+    moved.write_text(draft.read_text())
+    assert tomllib.loads(assemble.template(store, moved, clone))["draft"] == str(moved)
+
+
+def test_the_cli_template_refuses_to_overwrite_and_reports_errors(tmp_path, clone, capsys):
+    home = tmp_path / "home"
+    home.mkdir()
+    Store(home / "drafter.sqlite3").close()
+    draft = tmp_path / "brotli.draft.yaml"
+    draft.write_text(DRAFT)
+    assert cli.main(["--home", str(home), "pack", "template", "--draft", str(draft),
+                     "--packs", str(clone)]) == 1  # fmt: skip
+    assert "not decided" in capsys.readouterr().err
+    out = tmp_path / "a.toml"
+    out.write_text("mine\n")
+    s = Store(home / "drafter.sqlite3")
+    _cve(s, CVE)
+    decisions.record(s, _threat(s), "approve", "", "jch", "2026-11-08T18:53:00Z")
+    s.close()
+    assert cli.main(["--home", str(home), "pack", "template", "--draft", str(draft),
+                     "--packs", str(clone), "--out", str(out)]) == 1  # fmt: skip
+    assert out.read_text() == "mine\n" and "not overwritten" in capsys.readouterr().err
+
+
+# from the correctness review of A.7
+
+
+def _gappy(monkeypatch):
+    real = fill.build
+
+    def build(*args, **kwargs):
+        out = real(*args, **kwargs)
+        out.conflicts.append("rhel:9 edk2: Affected with no fixed build to take binaries from")
+        return out
+
+    monkeypatch.setattr(fill, "build", build)
+
+
+def test_gaps_the_vendor_data_leaves_stop_the_write_until_settled(
+    store, tmp_path, clone, ready, monkeypatch
+):
+    draft, _ = ready
+    _gappy(monkeypatch)
+    with pytest.raises(assemble.AssembleError, match="(?s)leaves these for a person.*rhel:9 edk2"):
+        _write(store, tmp_path, clone, draft)
+    assert not (clone / "packs" / "brotli-2026-10").exists()
+    done = _write(store, tmp_path, clone, draft, gaps_accepted='"no RHEL build is fixed yet"')
+    assert "gaps accepted: no RHEL build is fixed yet" in done.needs_a_person
+
+
+def test_a_person_can_write_the_entries_the_vendor_data_cant(store, tmp_path, clone, ready):
+    draft, _ = ready
+    entry = (
+        '[{release = "rhel:10", binary_names = ["edk2-ovmf"],'
+        ' source = "https://access.redhat.com/security/cve/CVE-2026-97631",'
+        ' note = "Red Hat: Affected, no fix yet"}]'
+    )
+    done = _write(store, tmp_path, clone, draft, by_hand=entry)
+    text = done.path.read_text()
+    assert "# Written by a person in the assembly file (A.7)" in text
+    assert "# added by a person: Red Hat: Affected, no fix yet" in text
+    assert '- release: "rhel:10"\n      binary_names: ["edk2-ovmf"]\n      fixed: null' in text
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        '[{release = "debian:12", binary_names = ["x"], source = "https://x.example/"}]',
+        '[{release = "rhel:9", binary_names = [], source = "https://x.example/"}]',
+        '[{release = "rhel:9", binary_names = ["x"]}]',
+        '[{release = "rhel:9", binary_names = ["x"], source = "https://x.example/", colour = "b"}]',
+        '[{release = "rhel:9", binary_names = ["x"], source = "https://x.example/", fixed = 1}]',
+    ],
+)
+def test_an_odd_by_hand_entry_is_refused(tmp_path, entry):
+    with pytest.raises(assemble.AssembleError, match="by_hand"):
+        assemble.read_assembly(_assembly(tmp_path, tmp_path / "d.yaml", by_hand=entry))
+
+
+def test_a_by_hand_entry_clashing_with_the_vendors_is_a_gap(store, tmp_path, clone, ready):
+    draft, _ = ready
+    clash = '[{release = "rhel:9", binary_names = ["brotli"], source = "https://x.example/"}]'
+    with pytest.raises(assemble.AssembleError, match="leaves these for a person"):
+        _write(store, tmp_path, clone, draft, by_hand=clash)
+
+
+def test_third_party_builds_without_proposals_are_a_gap(store, tmp_path, clone, ready, monkeypatch):
+    draft, _ = ready
+    from drafter import thirdparty
+
+    monkeypatch.setattr(thirdparty, "has_repositories", lambda ctx, cves: ["php:php"])
+    monkeypatch.setattr(thirdparty, "unknown_cves", lambda ctx, cves: [])
+    a = assemble.read_assembly(_assembly(tmp_path, draft))
+    with pytest.raises(assemble.AssembleError, match="php:php has third-party builds"):
+        assemble.write(store, object(), a, clone, now=lambda: NOW)
+
+
+def test_the_weight_is_written_exactly(store, tmp_path, clone, ready):
+    draft, _ = ready
+    done = _write(store, tmp_path, clone, draft, likelihood_ratio="4.123456789")
+    assert "  likelihood_ratio: 4.123456789\n" in done.path.read_text()
+
+
+def test_a_placeholder_source_is_refused(store, tmp_path, clone, ready):
+    draft, _ = ready
+    odd = '[{release = "rhel:10", binary_names = ["x"], source = "not a url"}]'
+    with pytest.raises(assemble.AssembleError, match="isn't an address the pack can carry"):
+        _write(store, tmp_path, clone, draft, by_hand=odd)
+
+
+def test_a_failed_write_leaves_the_clone_as_it_was(store, tmp_path, clone, ready, monkeypatch):
+    draft, _ = ready
+
+    def broken():
+        raise sqlite3.OperationalError("disk full")
+
+    monkeypatch.setattr(store, "transaction", broken)
+    with pytest.raises(sqlite3.OperationalError):
+        _write(store, tmp_path, clone, draft)
+    branches = subprocess.run(["git", "-C", str(clone), "branch", "--list"],  # noqa: S603, S607
+                              capture_output=True, text=True).stdout  # fmt: skip
+    assert "pack/" not in branches and "* dev" in branches
+    assert not (clone / "packs" / "brotli-2026-10" / "PACK.yaml").exists()
+
+
+def test_a_clone_behind_github_is_refused(store, tmp_path, clone, ready):
+    draft, _ = ready
+    origin = tmp_path / "origin.git"
+    _git(clone, "clone", "-q", "--bare", str(clone), str(origin))
+    _git(clone, "remote", "add", "origin", str(origin))
+    ahead = tmp_path / "ahead"
+    _git(tmp_path, "clone", "-q", str(origin), str(ahead))
+    (ahead / "README.md").write_text("newer\n")
+    _git(ahead, "add", ".")
+    _git(ahead, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "newer")
+    _git(ahead, "push", "-q", "origin", "dev")
+    with pytest.raises(assemble.AssembleError, match="1 commit\\(s\\) behind origin/dev: git pull"):
+        _write(store, tmp_path, clone, draft)
+
+
+def test_a_setting_no_source_names_is_listed(store, tmp_path, clone, ready):
+    draft, _ = ready
+    draft.write_text(DRAFT.replace("mitigations: []", (
+        "mitigations:\n- id: off\n  setting: {kind: php_ini, name: zend.made_up}\n"
+        "  expect: 'off'\n  default: 'on'\n  text: Turn it off.\n"
+    )))  # fmt: skip
+    done = _write(store, tmp_path, clone, draft)
+    assert "setting 'zend.made_up': in no source (a person's own?)" in done.notes

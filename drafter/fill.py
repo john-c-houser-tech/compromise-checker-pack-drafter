@@ -622,7 +622,7 @@ def build(
         draft.alma_as_of = f"{alma.last_success}, {caught_up}"
     draft.not_covered = sorted(set(draft.not_covered))
     draft.guessed = sorted(set(draft.guessed))
-    order = {"ubuntu": 0, "sury": 1, "redhat": 2, "alma": 3, "remi": 4}
+    order = {"ubuntu": 0, "sury": 1, "redhat": 2, "alma": 3, "remi": 4, "byhand": 5}
     draft.entries.sort(key=lambda e: (order[e.origin], e.release, e.versions or "", e.fixed or ""))
     return draft
 
@@ -666,6 +666,7 @@ def _merge(draft: Draft) -> None:
             pair[2].add(name)
             pair[3].add(e.versions)
     for other, e, names, patterns in clashes.values():
+        patterns = {p or "(any version)" for p in patterns}  # an entry with no pattern
         if other.fixed is None or e.fixed is None:
             advice = "keep fixed: null, since one CVE has no fix yet"
         elif other.fixed != e.fixed:
@@ -708,6 +709,7 @@ def render_yaml(draft: Draft) -> str:
         "alma": "AlmaLinux's own builds (debranded or early), matched only by AlmaLinux's",
         "sury": "Sury's PPA, confirmed by a person (A.3b)",
         "remi": "Remi's repository, confirmed by a person (A.3b)",
+        "byhand": "Written by a person in the assembly file (A.7)",
     }
     last = None
     for e in draft.entries:
