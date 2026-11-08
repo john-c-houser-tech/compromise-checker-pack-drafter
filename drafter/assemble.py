@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import contextlib
 import datetime as dt
 import difflib
 import hashlib
@@ -73,7 +74,8 @@ class Assembly:
     packages_from: dict[str, list[str]] | None = None
     packages_from_reason: str = ""
     by_hand: list[fill.Entry] = field(default_factory=list)  # a person's own entries
-    gaps_accepted: str = ""  # why what the vendor data couldn't settle is acceptable
+    # Each gap the vendor data leaves that a person accepts: (the start of its line, why).
+    accepted: list[tuple[str, str]] = field(default_factory=list)
     first_seen_in_wild: dt.datetime | None = None
     window_end: dt.datetime | None = None
     other_builds: str = "cant_judge"
@@ -147,7 +149,7 @@ def read_assembly(path: Path) -> Assembly:
     known_exp = {
         "window_start", "first_seen_in_wild", "window_end", "likelihood_ratio", "binaries",
         "packages_from", "packages_from_reason", "other_builds", "thirdparty", "stale_code",
-        "by_hand", "gaps_accepted",
+        "by_hand", "accept",
     }  # fmt: skip
     odd = sorted(set(data) - known_top) + sorted(f"exposure.{k}" for k in set(exposure) - known_exp)
     if odd:
@@ -203,9 +205,19 @@ def read_assembly(path: Path) -> Assembly:
     by_hand = []
     for item in exposure.get("by_hand") or []:
         by_hand.append(_by_hand(item))
-    gaps = exposure.get("gaps_accepted", "")
-    if not isinstance(gaps, str):
-        raise AssembleError("exposure.gaps_accepted: why the gaps are acceptable, in a sentence")
+    accepted = []
+    for item in exposure.get("accept") or []:
+        if (
+            not isinstance(item, dict)
+            or set(item) != {"gap", "reason"}
+            or not all(isinstance(v, str) and v.strip() for v in item.values())
+        ):
+            raise AssembleError(
+                'exposure.accept: each is {gap = "the start of the gap\'s line", reason = "why"}'
+            )
+        accepted.append(
+            (" ".join(item["gap"].split()), _printable(" ".join(item["reason"].split()), "reason"))
+        )
     if "window_start" not in exposure:
         raise AssembleError("exposure.window_start: when the threat became usable")
     return Assembly(
@@ -221,7 +233,7 @@ def read_assembly(path: Path) -> Assembly:
         ),
         packages_from_reason=_printable(" ".join(str(reason).split()), "packages_from_reason"),
         by_hand=by_hand,
-        gaps_accepted=_printable(" ".join(gaps.split()), "gaps_accepted"),
+        accepted=accepted,
         first_seen_in_wild=(
             _when(exposure["first_seen_in_wild"], "exposure.first_seen_in_wild")
             if "first_seen_in_wild" in exposure
@@ -326,6 +338,7 @@ def _git(clone: Path, *args: str) -> str:
             text=True,
             timeout=_GIT_TIMEOUT,
             check=False,
+            env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},  # a read-only fetch never asks
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise AssembleError(f"git: {exc}") from None
@@ -494,15 +507,30 @@ def _family(entry: fill.Entry) -> str:
     return next(f for f, origins in FAMILIES.items() if entry.origin in origins)
 
 
+VENDOR_ORIGINS = ("ubuntu", "redhat", "alma")  # what packages_from replaces; not Sury/Remi
+_LIMIT = re.compile(r"^\d+ entries: the checker takes at most")
+
+
+def _gap_family(line: str) -> str | None:
+    """Which family a fill note is about, or None for both."""
+    if line.startswith("rhel:") or "Red Hat" in line or "AlmaLinux" in line or "RHEL" in line:
+        return "rhel"
+    if line.startswith("ubuntu:") or "Ubuntu" in line:
+        return "ubuntu"
+    return None
+
+
 def _packages(
     store: Store, ctx: Any, a: Assembly, reviewed: Reviewed
 ) -> tuple[fill.Draft, list[str]]:
-    """The packages: the pack's own CVEs' vendor data, with a family's replaced by
-    another CVE's where the person says so (and said plainly)."""
+    """The packages: the pack's own CVEs' vendor data, with a family's vendor entries
+    replaced by another CVE's where the person says so (and said plainly). What the
+    vendor data couldn't settle follows the entries: a replaced family's gaps go with
+    them, the stand-in's come in."""
+    from drafter import thirdparty
+
     extra, unconfirmed, problems = [], 0, []
     if a.thirdparty:
-        from drafter import thirdparty
-
         extra, unconfirmed, problems = thirdparty.confirmed_entries(
             a.thirdparty.read_text(encoding="utf-8"), reviewed.cves, store
         )
@@ -532,28 +560,54 @@ def _packages(
             other = fill.build(ctx, cves, a.binaries, a.other_builds)
         except fill.FillError as exc:
             raise AssembleError(f"fill ({', '.join(cves)}): {exc}") from None
-        own = [e for e in filled.entries if _family(e) == family]
-        theirs = [e for e in other.entries if _family(e) == family]
-        filled.entries = [e for e in filled.entries if _family(e) != family] + theirs
-        filled.conflicts += [f"{', '.join(cves)}: {c}" for c in other.conflicts]
+
+        def replaceable(e: fill.Entry, family: str = family) -> bool:
+            return e.origin in VENDOR_ORIGINS and _family(e) == family
+
+        own = [e for e in filled.entries if replaceable(e)]
+        theirs = [e for e in other.entries if replaceable(e)]
+        if not theirs:
+            raise AssembleError(
+                f"packages_from {family}: {', '.join(cves)} gives no {family} entries with this"
+                f" binary filter: add its binaries (like {family}:ca-certificates)"
+            )
+        filled.entries = [e for e in filled.entries if not replaceable(e)] + theirs
+        tag = ", ".join(cves)
+
+        def ours(line: str, family: str = family) -> bool:
+            return _gap_family(line) == family
+
+        filled.conflicts = [c for c in filled.conflicts if not ours(c)] + [
+            f"{tag}: {c}" for c in other.conflicts if ours(c)
+        ]
+        filled.missing = [m for m in filled.missing if not ours(m)] + [
+            f"{tag}: {m}" for m in other.missing if ours(m)
+        ]
+        filled.not_covered += [f"{tag}: {n}" for n in other.not_covered if ours(n)]
+        filled.guessed += [f"{tag}: {g}" for g in other.guessed]
+        for release, names in other.filtered_out.items():
+            if release.startswith(f"{family}:"):
+                filled.filtered_out[release] = sorted(set(names))
         names = sorted({n for e in theirs for n in e.binary_names})
         dropped = sorted({n for e in own for n in e.binary_names})
         replaced.append(
-            f"{family}: {len(theirs)} entries from {', '.join(cves)} ({', '.join(names)[:200]})"
+            f"{family}: {len(theirs)} entries from {tag} ({', '.join(names)[:200]})"
             f" stand in for the pack's own {len(own)} ({', '.join(dropped)[:200] or 'none'}),"
             f" because {a.packages_from_reason}"
         )
     filled.entries += a.by_hand
-    if a.by_hand:
-        fill._merge(filled)  # a person's entry clashing with the vendors' is reported
-    if ctx is not None and not a.thirdparty:
-        from drafter import thirdparty
-
-        for cpe in thirdparty.has_repositories(ctx, reviewed.cves):
-            filled.conflicts.append(
-                f"{cpe} has third-party builds (thirdparty.toml): without a confirmed proposals"
-                " file (thirdparty, from `drafter propose`) a host on one reads not affected"
-            )
+    # Clashes and the entry limit, once, on what the pack will hold.
+    filled.conflicts = [c for c in filled.conflicts if not _LIMIT.match(c)]
+    fill._merge(filled)
+    filled.conflicts = list(dict.fromkeys(filled.conflicts))  # each once
+    if ctx is not None:
+        if not a.thirdparty:
+            for cpe in thirdparty.has_repositories(ctx, reviewed.cves):
+                filled.conflicts.append(
+                    f"{cpe} has third-party builds (thirdparty.toml): without a confirmed"
+                    " proposals file (thirdparty, from `drafter propose`) a host on one reads"
+                    " not affected"
+                )
         for cve in thirdparty.unknown_cves(ctx, reviewed.cves):
             filled.conflicts.append(
                 f"{cve}: no NVD or CISA row in the store, so whether it touches a third-party"
@@ -562,6 +616,30 @@ def _packages(
     order = {"ubuntu": 0, "sury": 1, "redhat": 2, "alma": 3, "remi": 4, "byhand": 5}
     filled.entries.sort(key=lambda e: (order[e.origin], e.release, e.versions or "", e.fixed or ""))
     return filled, replaced
+
+
+def _gaps(conflicts: list[str], accepted: list[tuple[str, str]]) -> tuple[list[str], list[str]]:
+    """What the vendor data couldn't settle must each be accepted by name: one
+    sentence for all of them would also cover new ones in a later version. An
+    acceptance that matches no gap any more is refused, for the same reason.
+    Returns (the gaps, each accepted one with its reason)."""
+    open_gaps = [c for c in conflicts if not any(c.startswith(g) for g, _ in accepted)]
+    stale = [g for g, _ in accepted if not any(c.startswith(g) for c in conflicts)]
+    if stale:
+        raise AssembleError(
+            "accepted gaps that aren't there any more (take them out of the assembly file):\n  "
+            + "\n  ".join(stale)
+        )
+    if open_gaps:
+        raise AssembleError(
+            "the vendor data leaves these for a person; settle each (by_hand entries, the"
+            " binary filter, packages_from) or accept it by name, with a reason"
+            ' (accept = [{gap = "…", reason = "…"}]):\n  ' + "\n  ".join(open_gaps)
+        )
+    settled = [
+        f"{c} (accepted: {next(r for g, r in accepted if c.startswith(g))})" for c in conflicts
+    ]
+    return conflicts, settled
 
 
 PLACEHOLDER = "https://invalid.example/"
@@ -573,7 +651,7 @@ def _current(clone: Path) -> str:
         _git(clone, "fetch", "--quiet", "origin", BASE_BRANCH)
     except AssembleError as exc:
         return f"couldn't check {BASE_BRANCH} is current ({exc})"
-    behind = _git(clone, "rev-list", "--count", f"HEAD..origin/{BASE_BRANCH}").strip()
+    behind = _git(clone, "rev-list", "--count", "HEAD..FETCH_HEAD").strip()
     if behind != "0":
         raise AssembleError(
             f"{clone} is {behind} commit(s) behind origin/{BASE_BRANCH}: git pull first"
@@ -581,16 +659,29 @@ def _current(clone: Path) -> str:
     return ""
 
 
-def _undo(clone: Path, branch: str, target: Path, existed: bool) -> None:
-    """A write that failed half way: back to dev, without the branch or the file."""
+def _undo(clone: Path, branch: str, target: Path, existed: bool) -> str:
+    """A write that failed part-way: back to dev, without the branch, the file or a
+    new pack's folder (the checker's index refuses a folder without a pack). Returns
+    what couldn't be undone, or ""."""
+    problems = []
     try:
         if target.exists():
             target.chmod(0o644)
-        _git(clone, "checkout", "--", ".") if existed else (target.unlink(missing_ok=True))
-        _git(clone, "switch", BASE_BRANCH)
-        _git(clone, "branch", "-D", branch)
-    except (AssembleError, OSError):
-        pass  # the original error says more; the clone shows the rest
+        if existed:
+            _git(clone, "checkout", "--", ".")
+        else:
+            target.unlink(missing_ok=True)
+            with contextlib.suppress(OSError):
+                target.parent.rmdir()  # only if empty
+    except (AssembleError, OSError) as exc:
+        problems.append(str(exc))
+    for args in (("switch", BASE_BRANCH), ("branch", "-D", branch)):
+        try:
+            _git(clone, *args)
+        except AssembleError as exc:
+            if "not found" not in str(exc):
+                problems.append(str(exc))
+    return "; ".join(problems)
 
 
 def _reference_notes(references: list, found: list[drafting.Source]) -> list[str]:
@@ -638,13 +729,7 @@ def write(
     filled, replaced = _packages(store, ctx, a, reviewed)
     if not filled.entries:
         raise AssembleError("the vendor data gave no packages for this pack: check binaries")
-    gaps = list(filled.conflicts) + list(filled.missing)
-    if gaps and not a.gaps_accepted:
-        raise AssembleError(
-            "the vendor data leaves these for a person; settle them (by_hand entries, the"
-            " binary filter, packages_from) or say why they're acceptable (gaps_accepted):\n  "
-            + "\n  ".join(gaps)
-        )
+    gaps, settled = _gaps(filled.conflicts, a.accepted)
     current = _current(clone)
     edits = edited(store, reviewed, decision.id)
     text = compose(a, reviewed, filled, now().date(), edits)
@@ -662,8 +747,8 @@ def write(
         old = _git(clone, "show", f"HEAD:packs/{a.id}/PACK.yaml")
     base = _git(clone, "rev-parse", "--short", "HEAD").strip()
     branch = f"pack/{a.id}-v{a.version}"
-    _git(clone, "switch", "-c", branch)
     try:
+        _git(clone, "switch", "-c", branch)
         target.parent.mkdir(parents=True, exist_ok=True)
         if target.exists():
             target.chmod(0o644)
@@ -678,8 +763,13 @@ def write(
                 (timeutil.fmt(now()), a.id, a.version, str(target), sha,
                  json.dumps(reviewed.cves), decision.id, reviewed.sha256, a.reviewed_by, a.text),
             )  # fmt: skip
-    except BaseException:
-        _undo(clone, branch, target, listed is not None)
+    except BaseException as exc:
+        left = _undo(clone, branch, target, listed is not None)
+        if left:
+            raise AssembleError(
+                f"{type(exc).__name__}: {exc}; and the clone couldn't all be put back ({left}):"
+                " check it by hand"
+            ) from exc
         raise
     diff = "".join(
         difflib.unified_diff(
@@ -698,9 +788,7 @@ def write(
         notes,
         base=f"{BASE_BRANCH} at {base}",
         replaced=replaced,
-        needs_a_person=gaps
-        + ([f"gaps accepted: {a.gaps_accepted}"] if gaps else [])
-        + ([current] if current else []),
+        needs_a_person=settled + list(filled.missing) + ([current] if current else []),
         edits=edits,
     )
 
@@ -759,6 +847,16 @@ def verify(path: Path, keys: list[str], minisign: str = "minisign") -> tuple[str
         raise AssembleError("minisign isn't installed: it checks the signature")
     if not Path(f"{path}.minisig").is_file():
         raise AssembleError(f"no {path.name}.minisig beside it: sign it first")
+    try:
+        lines = Path(f"{path}.minisig").read_text(encoding="utf-8").splitlines()
+        algorithm = base64.b64decode(lines[1], validate=True)[:2]
+    except (OSError, IndexError, ValueError, binascii.Error):
+        algorithm = b""
+    if algorithm != b"ED":
+        raise AssembleError(
+            f"{path.name}.minisig isn't a prehashed signature (minisign's default since 0.10):"
+            " the checker refuses legacy ones; sign again without -l"
+        )
     for key in keys:
         try:
             done = subprocess.run(  # noqa: S603 - minisign, with fixed arguments
@@ -905,6 +1003,8 @@ def template(store: Store, draft_path: Path, clone_path: Path) -> str:
         "# checker's 100 entries): `drafter fill CVE…` lists them.",
         "binaries = []",
         'other_builds = "cant_judge"',
+        "# What the vendor data can't settle stops the write: settle it, or accept each by name:",
+        '# accept = [{gap = "rhel:9 edk2", reason = "…"}]',
         "# A family whose releases are fixed in another CVE's update, judged from its data:",
         '# packages_from = {rhel = ["CVE-…"]}',
         '# packages_from_reason = "RHEL is fixed by the ca-certificates update"',

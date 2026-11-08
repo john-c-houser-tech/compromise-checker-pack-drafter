@@ -123,7 +123,7 @@ def _assembly(tmp_path, draft_path, **changes):
         if key in exposure or key in ("first_seen_in_wild", "window_end", "packages_from",
             "packages_from_reason",
             "by_hand",
-            "gaps_accepted",
+            "accept",
                                       "stale_code", "thirdparty"):  # fmt: skip
             if value is None:
                 exposure.pop(key, None)
@@ -676,7 +676,7 @@ def _gappy(monkeypatch):
     monkeypatch.setattr(fill, "build", build)
 
 
-def test_gaps_the_vendor_data_leaves_stop_the_write_until_settled(
+def test_gaps_the_vendor_data_leaves_stop_the_write_until_accepted_by_name(
     store, tmp_path, clone, ready, monkeypatch
 ):
     draft, _ = ready
@@ -684,8 +684,22 @@ def test_gaps_the_vendor_data_leaves_stop_the_write_until_settled(
     with pytest.raises(assemble.AssembleError, match="(?s)leaves these for a person.*rhel:9 edk2"):
         _write(store, tmp_path, clone, draft)
     assert not (clone / "packs" / "brotli-2026-10").exists()
-    done = _write(store, tmp_path, clone, draft, gaps_accepted='"no RHEL build is fixed yet"')
-    assert "gaps accepted: no RHEL build is fixed yet" in done.needs_a_person
+    accept = '[{gap = "rhel:9 edk2", reason = "no RHEL build is fixed yet"}]'
+    done = _write(store, tmp_path, clone, draft, accept=accept)
+    assert done.needs_a_person[0].endswith("(accepted: no RHEL build is fixed yet)")
+
+
+def test_an_acceptance_covers_only_its_own_gap_and_must_still_match_one(
+    store, tmp_path, clone, ready, monkeypatch
+):
+    draft, _ = ready
+    _gappy(monkeypatch)
+    other = '[{gap = "ubuntu:24.04 something", reason = "x"}]'
+    with pytest.raises(assemble.AssembleError, match="aren't there any more"):
+        _write(store, tmp_path, clone, draft, accept=other)
+    both = '[{gap = "rhel:9 edk2", reason = "x"}, {gap = "ubuntu:24.04 something", reason = "y"}]'
+    with pytest.raises(assemble.AssembleError, match="(?s)aren't there any more.*ubuntu:24.04"):
+        _write(store, tmp_path, clone, draft, accept=both)
 
 
 def test_a_person_can_write_the_entries_the_vendor_data_cant(store, tmp_path, clone, ready):
@@ -786,3 +800,172 @@ def test_a_setting_no_source_names_is_listed(store, tmp_path, clone, ready):
     )))  # fmt: skip
     done = _write(store, tmp_path, clone, draft)
     assert "setting 'zend.made_up': in no source (a person's own?)" in done.notes
+
+
+# from the third review of A.7
+
+
+def test_a_replaced_familys_gaps_go_with_it_and_the_stand_ins_come_in(
+    store, tmp_path, clone, ready, monkeypatch
+):
+    draft, _ = ready
+    _cve(store, OTHER)
+    real = fill.build
+
+    def build(*args, **kwargs):
+        out = real(*args, **kwargs)
+        if OTHER in args[1]:
+            out.conflicts += ["rhel:10 ca-certificates: unreadable advisory", "ubuntu:24.04 x: odd"]
+            out.missing.append("Ubuntu has no record for CVE-2026-114406")
+        else:
+            out.conflicts.append("rhel:9 java-17-openjdk: Will not fix; name its binaries by hand")
+        return out
+
+    monkeypatch.setattr(fill, "build", build)
+    accept = f'[{{gap = "{OTHER}: rhel:10 ca-certificates", reason = "read by hand"}}]'
+    done = _write(
+        store, tmp_path, clone, draft,
+        packages_from=f'{{rhel = ["{OTHER}"]}}', packages_from_reason='"fixed in ca-certs"',
+        accept=accept,
+    )  # fmt: skip
+    joined = "\n".join(done.needs_a_person)
+    assert "java-17-openjdk" not in joined  # the replaced family's gap is gone
+    assert f"{OTHER}: rhel:10 ca-certificates" in joined  # the stand-in's came in
+    assert "ubuntu:24.04 x" not in joined  # but not its other family's
+
+
+def test_a_stand_in_with_no_entries_is_refused(store, tmp_path, clone, ready, monkeypatch):
+    draft, _ = ready
+    _cve(store, OTHER)
+    real = fill.build
+    monkeypatch.setattr(
+        fill, "build",
+        lambda *a, **k: fill.Draft(cves=a[1], binary_filter=[]) if OTHER in a[1] else real(*a, **k),
+    )  # fmt: skip
+    with pytest.raises(
+        assemble.AssembleError, match="gives no rhel entries with this binary filter"
+    ):
+        _write(store, tmp_path, clone, draft, packages_from=f'{{rhel = ["{OTHER}"]}}',
+               packages_from_reason='"x"')  # fmt: skip
+
+
+def test_confirmed_third_party_entries_stay_when_a_family_is_replaced(
+    store, tmp_path, clone, ready, monkeypatch
+):
+    draft, _ = ready
+    _cve(store, OTHER)
+    real = fill.build
+
+    def build(ctx, cves, filters, other="cant_judge", extra=None, unconfirmed=0):
+        out = real(ctx, cves, filters, other, extra, unconfirmed)
+        if OTHER not in cves:
+            out.entries.append(fill.Entry("rhel:9", ["php-cli"], "*.remi", "8.3.27-1.el9.remi",
+                                          "https://rpms.remirepo.net/", "remi"))  # fmt: skip
+        return out
+
+    monkeypatch.setattr(fill, "build", build)
+    done = _write(store, tmp_path, clone, draft, packages_from=f'{{rhel = ["{OTHER}"]}}',
+                  packages_from_reason='"x"')  # fmt: skip
+    assert '"php-cli"' in done.path.read_text()
+
+
+def test_a_vendor_not_tracking_a_cve_is_shown_not_blocking(
+    store, tmp_path, clone, ready, monkeypatch
+):
+    draft, _ = ready
+    real = fill.build
+
+    def build(*args, **kwargs):
+        out = real(*args, **kwargs)
+        out.missing.append("Ubuntu has no record for CVE-2026-111497 (it doesn't track it)")
+        return out
+
+    monkeypatch.setattr(fill, "build", build)
+    done = _write(store, tmp_path, clone, draft)
+    assert any("Ubuntu has no record" in n for n in done.needs_a_person)
+
+
+def test_clashes_are_reported_once(store, tmp_path, clone, ready):
+    draft, _ = ready
+    clash = '[{release = "rhel:9", binary_names = ["brotli"], source = "https://x.example/"}]'
+    with pytest.raises(assemble.AssembleError) as caught:
+        _write(store, tmp_path, clone, draft, by_hand=clash)
+    lines = [ln for ln in str(caught.value).splitlines() if "in two entries" in ln]
+    assert len(lines) == 1
+
+
+def test_unknown_cves_are_reported_with_a_proposals_file_too(
+    store, tmp_path, clone, ready, monkeypatch
+):
+    draft, _ = ready
+    from drafter import thirdparty
+
+    monkeypatch.setattr(thirdparty, "confirmed_entries", lambda text, cves, store: ([], 0, []))
+    monkeypatch.setattr(thirdparty, "unknown_cves", lambda ctx, cves: [CVE])
+    proposals = tmp_path / "p.toml"
+    proposals.write_text("")
+    a = assemble.read_assembly(_assembly(tmp_path, draft, thirdparty=f'"{proposals}"'))
+    with pytest.raises(assemble.AssembleError, match="no NVD or CISA row"):
+        assemble.write(store, object(), a, clone, now=lambda: NOW)
+
+
+def test_a_failed_new_write_leaves_no_empty_folder(store, tmp_path, clone, ready, monkeypatch):
+    draft, _ = ready
+
+    def broken():
+        raise sqlite3.OperationalError("disk full")
+
+    monkeypatch.setattr(store, "transaction", broken)
+    with pytest.raises(sqlite3.OperationalError):
+        _write(store, tmp_path, clone, draft)
+    assert not (clone / "packs" / "brotli-2026-10").exists()
+
+
+def test_a_clone_without_a_dev_tracking_ref_is_still_compared(store, tmp_path, clone, ready):
+    draft, _ = ready
+    origin = tmp_path / "origin.git"
+    _git(clone, "clone", "-q", "--bare", str(clone), str(origin))
+    _git(clone, "remote", "add", "origin", str(origin))
+    # fetched like a single-branch clone of main: a fetch of dev makes no origin/dev
+    _git(clone, "config", "remote.origin.fetch", "+refs/heads/main:refs/remotes/origin/main")
+    done = _write(store, tmp_path, clone, draft)
+    assert not any("couldn't check" in n for n in done.needs_a_person)
+
+
+@pytest.mark.skipif(shutil.which("minisign") is None, reason="minisign isn't installed")
+def test_a_legacy_signature_is_refused(tmp_path):
+    def run(*args):
+        subprocess.run(["minisign", *args], check=True, capture_output=True, input=b"")  # noqa: S603, S607
+
+    run("-G", "-W", "-p", str(tmp_path / "k.pub"), "-s", str(tmp_path / "k.key"))
+    pack = tmp_path / "index.yaml"
+    pack.write_text("x: 1\n")
+    run("-S", "-l", "-s", str(tmp_path / "k.key"), "-m", str(pack))
+    key = (tmp_path / "k.pub").read_text().splitlines()[1]
+    with pytest.raises(assemble.AssembleError, match="legacy"):
+        assemble.verify(pack, [key])
+
+
+def test_a_clash_fill_already_reported_is_reported_once(store, tmp_path, clone, ready, monkeypatch):
+    draft, _ = ready
+    real = fill.build
+
+    def build(*args, **kwargs):
+        out = real(*args, **kwargs)
+        out.entries.append(
+            fill.Entry(
+                "rhel:9",
+                ["brotli"],
+                None,
+                "1.0.9-8.el9",
+                "https://access.redhat.com/errata/RHSA-2026:3",
+                "redhat",
+            )
+        )
+        fill._merge(out)  # as fill.build does
+        return out  # fmt: skip
+
+    monkeypatch.setattr(fill, "build", build)
+    with pytest.raises(assemble.AssembleError) as caught:
+        _write(store, tmp_path, clone, draft)
+    assert sum("in two entries" in ln for ln in str(caught.value).splitlines()) == 1

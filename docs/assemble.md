@@ -47,15 +47,20 @@ other_builds = "cant_judge"
 # stale_code = ["node*"]                # programs to restart after the fix
 # by_hand = [{release = "rhel:10", binary_names = ["edk2-ovmf"], source = "https://…",
 #             note = "Red Hat: Affected, no fix yet"}]   # entries the vendor data can't give
-# gaps_accepted = "…"                    # why what's still unsettled is acceptable
+# accept = [{gap = "rhel:9 edk2", reason = "…"}]   # a gap accepted by name, with why
 ```
 
 **What the vendor data can't settle stops the write**: a release Red Hat calls
 affected with no fixed build to take binary names from (edk2), an advisory that can't
 be read, a clash between two entries, too many entries, a watched third-party
-product with no confirmed proposals file. Settle each (a `by_hand` entry, the binary
-filter, `packages_from`, a proposals file), or say in `gaps_accepted` why it's
-acceptable; the gaps and the reason are then shown under NEEDS A PERSON. A `by_hand`
+product with no confirmed proposals file, a CVE with no NVD or CISA row. Settle each
+(a `by_hand` entry, the binary filter, `packages_from`, a proposals file), or accept
+it **by name** in `accept`, with a reason: each acceptance names the start of one
+gap's line, so it never covers a gap that turns up later (a later version reusing the
+file), and one that matches no gap any more is refused too. Accepted gaps and their
+reasons are shown under NEEDS A PERSON. A vendor that doesn't track a CVE at all
+("Ubuntu has no record for …", routine for a RHEL-only CVE) is shown there but
+doesn't stop the write. A `by_hand`
 entry (release, binary names, source, and optionally versions, a fixed build and a
 note) is marked in the pack as written by a person, and held to the same clash rules
 as the vendors' entries.
@@ -64,8 +69,12 @@ as the vendors' entries.
 marks its Java packages "will not fix" for CVE-2026-91403 because RHEL is fixed by the
 ca-certificates update (CVE-2026-114406), so a Java pack judged from Java's own data
 would show every RHEL host with Java as vulnerable for ever. It is **per family**
-(`ubuntu`, `rhel`): only that family's entries come from the other CVE, the rest stay
-the pack's own (Ubuntu's own records for the Java CVE still count). The other CVE must
+(`ubuntu`, `rhel`): only that family's vendor entries come from the other CVE, the
+rest stay the pack's own (Ubuntu's own records for the Java CVE still count), and so
+do confirmed third-party builds (Sury, Remi). What the vendor data couldn't settle
+follows the entries: the replaced family's gaps go, the stand-in's come in. A stand-in
+that gives that family no entries with the binary filter is refused (add its
+binaries, like `rhel:ca-certificates`). The other CVE must
 have that vendor's record in the store (a typo is refused), a reason is required, and
 both go into the pack's comments and the output under PACKAGES JUDGED FROM OTHER CVEs,
 with the packages that stand in and the ones they replace.
@@ -86,8 +95,9 @@ Ubuntu's .NET, 50.
    the clone's index doesn't list, else the listed one plus one; a pack folder the
    index doesn't list, or an id the index lists as withdrawn, is refused. The clone
    must be on `dev` with nothing uncommitted, and not behind GitHub's `dev` (a read-only
-   fetch, no token; offline, the output says it couldn't check). A write that fails
-   part-way puts the clone back on `dev`, without the branch or the file.
+   fetch, no token, no prompt; offline, the output says it couldn't check). A write
+   that fails part-way puts the clone back on `dev`, without the branch, the file or a
+   new pack's folder, and says if any of that couldn't be done.
 3. Runs `drafter fill` for the packages (`packages_from`, or the draft's CVEs), with
    the binary filter, `other_builds` and any confirmed third-party builds.
 4. Composes the pack, with comments saying where each part came from: the reviewer,
@@ -110,8 +120,9 @@ Ubuntu's .NET, 50.
 ## What `check` does, after signing
 
 1. Refuses a file changed since it was frozen (its SHA-256 against the store's).
-2. Refuses a missing signature, and checks it with `minisign` against each pack key in
-   the clone's `keys.yaml`; the trusted comment must be `ID version N`.
+2. Refuses a missing signature, or a legacy one (`minisign -l`: the checker refuses
+   those), and checks it with `minisign` against each pack key in the clone's
+   `keys.yaml`; the trusted comment must be `ID version N`.
 3. Writes the index with the checker's own `checker packs index` (which checks every
    pack's signature again, and `keys.yaml`'s against the root key), once: run again
    after signing the index, `check` sees the index already lists this very pack and
