@@ -17,7 +17,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 _SCHEMA = """
 CREATE TABLE fetches (
@@ -227,6 +227,28 @@ CREATE TABLE ai_request (
 );
 CREATE TRIGGER ai_request_kept BEFORE DELETE ON ai_request
 BEGIN SELECT RAISE(ABORT, 'the record of AI spending is kept'); END;
+""",
+    7: """
+-- A.7: each pack written into a packs clone for signing, with the SHA-256 it was
+-- frozen at, so `drafter pack check` can refuse a file changed before or after
+-- signing. Append-only, like the decisions.
+CREATE TABLE pack_assembly (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    assembled_at TEXT NOT NULL,
+    pack_id TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    path TEXT NOT NULL,
+    sha256 TEXT NOT NULL,
+    cves TEXT NOT NULL,           -- JSON list
+    decision_id INTEGER NOT NULL REFERENCES decision(id),
+    draft_sha256 TEXT NOT NULL,   -- the reviewed draft it was assembled from
+    reviewed_by TEXT NOT NULL,
+    assembly TEXT NOT NULL        -- the assembly file, as it was
+);
+CREATE TRIGGER pack_assembly_kept BEFORE UPDATE ON pack_assembly
+BEGIN SELECT RAISE(ABORT, 'assemblies are append-only'); END;
+CREATE TRIGGER pack_assembly_not_removed BEFORE DELETE ON pack_assembly
+BEGIN SELECT RAISE(ABORT, 'assemblies are append-only'); END;
 """,
 }
 

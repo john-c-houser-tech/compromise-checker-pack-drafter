@@ -1,6 +1,6 @@
 # Pack application build plan — 2026-10-31
 
-> **Status: 2026-11-08.** Stage 1 (A.1–A.3) built; A.4 and A.4b (the decision page) built; A.5 (AI drafts) built and used (six drafts, $0.45); A.6 (text checks) going ahead. D1–D4, D6 and D7 settled; D5 waits for A.8.
+> **Status: 2026-11-08.** Stage 1 (A.1–A.3) built; A.4 and A.4b (the decision page) built; A.5 (AI drafts) built and used (six drafts, $0.45); A.6 (text checks) built; A.7 (assembly) going ahead. D1–D4, D6 and D7 settled; D5 waits for A.8.
 > Starts from the outline agreed on 2026-10-30, in Compromise Checker's
 > `plans/phase4-build-plan-2026-10-30.md`, "After Phase 4: the pack application".
 
@@ -145,7 +145,9 @@ refused wherever they came from.*
 
 **A.7 Hand-off.** Write `PACK.yaml` on a branch of a local packs clone, show what
 changed since the last version, freeze it, and print the signing command. Then
-check the signature and run `checker packs index`.
+check the signature and run `checker packs index`. *Go-ahead: John, 2026-11-08; built as `drafter pack
+template|write|check` ([`docs/assemble.md`](../docs/assemble.md)): a person's assembly
+file holds the id, window, weight, binary filter and `packages_from` (the Java case).*
 
 *To settle before assembling (found 2026-11-08):* a threat whose fix is in another
 package. Red Hat lists the Java packages for CVE-2026-91403 as "will not fix", because

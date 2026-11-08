@@ -171,6 +171,30 @@ def _parser() -> argparse.ArgumentParser:
     )
     commands.add_parser("spend", help="every request sent to the AI, and the caps (A.5)")
 
+    packing = commands.add_parser("pack", help="assemble an approved, drafted threat's pack (A.7)")
+    pack_actions = packing.add_subparsers(dest="action", required=True)
+    tmpl = pack_actions.add_parser("template", help="an assembly file to edit, from a draft")
+    tmpl.add_argument("--draft", type=Path, required=True, help="the reviewed draft file")
+    tmpl.add_argument("--packs", type=Path, required=True, help="a clone of the packs repository")
+    tmpl.add_argument("--out", type=Path, help="write it here (default: print it)")
+    writing = pack_actions.add_parser(
+        "write", help="the pack, on a new branch of the packs clone, frozen for signing"
+    )
+    writing.add_argument("assembly", type=Path, help="the assembly file (TOML)")
+    writing.add_argument(
+        "--packs", type=Path, required=True, help="a clone of the packs repository"
+    )
+    checking = pack_actions.add_parser(
+        "check", help="after signing: the frozen file, its signature, then the index"
+    )
+    checking.add_argument("id", help="the pack's id")
+    checking.add_argument(
+        "--packs", type=Path, required=True, help="a clone of the packs repository"
+    )
+    checking.add_argument(
+        "--checker", default="checker", help="the checker's command (default: %(default)s)"
+    )
+
     web = commands.add_parser("web", help="the candidate page, to approve or reject (A.4)")
     web.add_argument("--port", type=int, default=8089, help="on 127.0.0.1 (default: %(default)s)")
     web.add_argument(
@@ -213,8 +237,10 @@ def main(argv: list[str] | None = None) -> int:
     known = by_name()
     if args.command == "web":
         return _web(home, args)
-    if args.command in ("decisions", "spend") or (
-        args.command == "draft" and getattr(args, "dry_run", False)
+    if (
+        args.command in ("decisions", "spend")
+        or (args.command == "draft" and getattr(args, "dry_run", False))
+        or (args.command == "pack" and args.action in ("template", "check"))
     ):
         try:
             store = _reader(home / "drafter.sqlite3")
@@ -226,6 +252,8 @@ def main(argv: list[str] | None = None) -> int:
                 return _spend(store)
             if args.command == "draft":
                 return _draft_dry(store, args)
+            if args.command == "pack":
+                return _pack_read(store, args)
             return _decisions(store)
         finally:
             store.close()
@@ -267,6 +295,8 @@ def main(argv: list[str] | None = None) -> int:
             return _candidates_write(ctx, args)
         if args.command == "fill":
             return _fill(ctx, args)
+        if args.command == "pack":
+            return _pack_write(ctx, args)
         if args.command == "propose":
             return _propose(ctx, args)
         if args.action == "fetch":
@@ -586,6 +616,67 @@ def _draft(store: Store, args, cves: list[str]) -> int:
         print("NOT USABLE: the answer was refused (the reasons are in the draft)", file=sys.stderr)
         return 1
     return 0
+
+
+def _pack_read(store: Store, args) -> int:
+    from drafter import assemble
+
+    try:
+        if args.action == "template":
+            text = assemble.template(store, args.draft, args.packs)
+            if args.out:
+                args.out.write_text(text, encoding="utf-8")
+                print(f"assembly file written to {safe(args.out)}: fill in what it asks")
+            else:
+                print(safe_lines(text))
+            return 0
+        done = assemble.check(store, args.id, args.packs, checker=args.checker)
+    except assemble.AssembleError as exc:
+        print(safe_lines(str(exc)), file=sys.stderr)
+        return 1
+    print(safe(f"{done.path}: unchanged since it was frozen, signed by pack key"
+               f" {done.key[:16]}…, trusted comment {done.comment!r}"))  # fmt: skip
+    print(safe_lines(done.index_output))
+    clone = safe(args.packs)
+    print(
+        f"Then: sign the index (minisign -S -s {assemble.PACK_KEY} -m {clone}/index.yaml),"
+        f" and in {clone} commit packs/{safe(args.id)} with index.yaml and its signature,"
+        " push the branch and open a pull request into dev. Don't touch a file after"
+        " signing it."
+    )
+    return 0
+
+
+def _pack_write(ctx: Context, args) -> int:
+    from drafter import assemble
+
+    try:
+        a = assemble.read_assembly(args.assembly)
+        done = assemble.write(ctx.store, ctx, a, args.packs, now=ctx.now)
+    except (assemble.AssembleError, OSError) as exc:
+        print(safe_lines(str(exc)), file=sys.stderr)
+        return 1
+    except draft_errors() as exc:
+        print(safe_lines(str(exc)), file=sys.stderr)
+        return 1
+    print(safe_lines(done.report))
+    if done.notes:
+        print("CHECK BEFORE SIGNING: what the prose points people at, and where it came from:")
+        for note in done.notes:
+            print(safe(f"  {note}"))
+    print(safe_lines(done.diff) if done.diff else "(a new pack: nothing to compare with)")
+    print(safe(f"Written to {done.path}, read-only, on branch {done.branch}."))
+    print(f"SHA-256: {done.sha256}")
+    print("Read it, then sign it (a person, by hand):")
+    print(safe(f"  {assemble.sign_command(done.path, a.id, a.version)}"))
+    print(safe(f"Then: drafter pack check {a.id} --packs {args.packs}"))
+    return 0
+
+
+def draft_errors() -> tuple[type[Exception], ...]:
+    from drafter import draft, fill
+
+    return (draft.DraftError, fill.FillError)
 
 
 def _spend(store: Store) -> int:
