@@ -95,7 +95,8 @@ def test_cves_decided_apart_ask_for_a_look_again():
 @pytest.mark.parametrize(
     ("verdict", "reason", "message"),
     [
-        ("approve", " \n\t ", "a reason is needed"),
+        ("reject", " \n\t ", "a reason is needed to reject"),
+        ("reject", "", "a reason is needed to reject"),
         ("approve", "x" * 1001, "1000 at most"),
         ("maybe", "fine", "approve or reject"),
     ],
@@ -261,7 +262,7 @@ def test_the_page_answers_only_to_its_own_names(page):
             400,
         ),
         (
-            "token=T&kind=judge&cves=CVE-2026-109618,CVE-2026-109619&families=php&verdict=approve&reason=+",
+            "token=T&kind=judge&cves=CVE-2026-109618,CVE-2026-109619&families=php&verdict=reject&reason=+",
             400,
         ),
         (
@@ -610,3 +611,209 @@ def test_a_look_again_threat_is_settled_once_it_leaves_the_window(page):
     page.site.days = 10
     _, html = page.request("GET")
     assert 'id="t-cve-2026-109618"' not in html
+
+
+# A.4b: what each card says, Covered, an approve without a reason, and attacks
+# that come after a reject
+
+
+def _rated_only(store, cve, when="2026-10-20T00:00:00.000000Z", package="dotnet8.0"):
+    from tests.test_candidates import _rh
+
+    _rh(store, cve, when)
+    _nvd(store, cve, when, exploitation="none")
+    _vendor(store, cve, "ubuntu", [])
+    _vendor(store, cve, "redhat", [_pkg("rhel:9", package)])
+
+
+DOTNET = "CVE-2026-70188"
+
+
+def _card_html(html, cve):
+    return html.split(f'id="t-{cve.lower()}"', 1)[1].split("</article>", 1)[0]
+
+
+def _with(page, fn):
+    s = Store(page.site.store_path)
+    try:
+        fn(s)
+    finally:
+        s.close()
+
+
+def test_a_card_says_whether_it_is_attacked_and_what_it_is(page):
+    def seed(s):
+        _rated_only(s, DOTNET)
+        s.db.execute(
+            "UPDATE vendor_cve SET title = 'dotnet: smuggling', statement = ? WHERE cve = ?",
+            ("Kestrel <script>alert(1)</script> is exposed.", DOTNET),
+        )
+        s.db.execute(
+            "UPDATE nvd SET cvss = ? WHERE cve = ?",
+            (
+                '{"version": "3.1", "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N",'
+                ' "score": 9.1, "source": "secure@microsoft.com"}',
+                DOTNET,
+            ),
+        )
+
+    _with(page, seed)
+    _, html = page.request("GET")
+    card = _card_html(html, DOTNET)
+    assert "No sign of attacks" in card and "CISA says none (2026-10-20)" in card
+    assert "Listed on Red Hat&#39;s Critical rating alone" in card
+    assert "Red Hat: dotnet: smuggling" in card
+    assert (
+        "Over the network, no login, no user action (CVSS 3.1: 9.1, Microsoft&#39;s score)" in card
+    )
+    assert "Fixed on every listed release" in card
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in card and "<script" not in html
+    php = _card_html(html, PHP[0])
+    assert "Exploited" in php and "CISA says active (2026-10-21), for both" in php
+    assert "Signals" not in php
+    assert "Signals" in _card_html(html, KERNEL)  # a notice keeps its plain list
+
+
+def test_an_approve_needs_no_reason_and_a_reject_does(page, capsys):
+    response, html = page.post(page.form(verdict="reject", reason="  "))
+    assert response.status == 400 and "a reason is needed to reject" in html
+    assert page.post(page.form(reason=""))[0].status == 303
+    [d] = _stored(page)
+    assert (d.verdict, d.reason) == ("approve", "")
+    _, html = page.request("GET")
+    assert "with no reason given" in _card_html(html, PHP[0])
+    assert "<td>–</td>" in html
+    assert cli.main(["--home", str(page.site.home), "decisions"]) == 0
+    assert "by jch: (no reason given)" in capsys.readouterr().out
+    assert cli.main(["--home", str(page.site.home), "candidates", "list", "--days", "60"]) == 0
+    assert "decision: approved 2026-11-07\n" in capsys.readouterr().out
+
+
+def test_a_reject_comes_back_when_attacks_are_reported_after_it(page, capsys):
+    _with(page, lambda s: _rated_only(s, DOTNET))
+    body = page.form(cves=DOTNET, families="dotnet", verdict="reject", reason="no sign of attacks")
+    assert page.post(body)[0].status == 303
+    [d] = _stored(page)
+    assert d.signs == ()
+    _, html = page.request("GET")
+    assert "pill-reject" in _card_html(html, DOTNET)
+    _with(page, lambda s: _kev(s, DOTNET, "2026-11-07"))
+    _, html = page.request("GET")
+    card = _card_html(html, DOTNET)
+    assert "Look again" in card and "Attacks reported since:</strong> on CISA&#39;s list" in card
+    assert "2 to decide" in html  # it, and PHP
+    home = str(page.site.home)
+    assert cli.main(["--home", home, "candidates", "list", "--days", "60"]) == 0
+    assert "attacks reported since: on CISA's list 2026-11-07" in capsys.readouterr().out
+    # deciding again settles it, with the new sign kept
+    assert page.post(page.form(cves=DOTNET, families="dotnet", reason=""))[0].status == 303
+    assert _stored(page)[0].signs == (f"kev:{DOTNET}",)
+    _, html = page.request("GET")
+    card = _card_html(html, DOTNET)
+    assert "pill-approve" in card and "Look again" not in card
+
+
+def test_an_approve_or_a_restamped_sign_does_not_come_back(page):
+    def seed(s):
+        _rated_only(s, DOTNET)
+        for cve in PHP:  # on CISA's list too, so a re-stamp doesn't move its first sign
+            _kev(s, cve, "2026-10-21")
+
+    _with(page, seed)
+    body = page.form(cves=DOTNET, families="dotnet", reason="yes")
+    assert page.post(body)[0].status == 303
+    assert page.post(page.form(verdict="reject", reason="covered by hand"))[0].status == 303
+
+    def later(s):
+        _kev(s, DOTNET, "2026-11-07")  # after an approve: nothing to look at again
+        _nvd(s, PHP[0], "2026-11-06T00:00:00.000000Z")  # CISA re-stamps PHP's rating
+
+    _with(page, later)
+    _, html = page.request("GET")
+    dotnet = _card_html(html, DOTNET)
+    assert "pill-approve" in dotnet and "Look again" not in dotnet
+    php = _card_html(html, PHP[0])
+    assert "Rejected" in php and "Look again" not in php
+
+
+def test_a_reject_made_before_schema_5_is_not_brought_back(page):
+    _with(page, lambda s: _rated_only(s, DOTNET))
+
+    def old_reject(s):
+        s.db.execute(
+            "INSERT INTO decision (decided_at, cves, kind, families, verdict, reason,"
+            " decided_by, signs) VALUES ('2026-11-01T00:00:00Z', ?, 'judge', '[\"dotnet\"]',"
+            " 'reject', 'old', 'jch', NULL)",
+            (f'["{DOTNET}"]',),
+        )
+        _kev(s, DOTNET, "2026-11-07")
+
+    _with(page, old_reject)
+    _, html = page.request("GET")
+    card = _card_html(html, DOTNET)
+    assert "pill-reject" in card and "Look again" not in card
+
+
+def test_an_older_reject_comes_back_after_its_window(page):
+    _with(page, lambda s: _rated_only(s, DOTNET, "2026-10-10T00:00:00.000000Z"))
+    page.site.days = 20
+    body = page.form(cves=DOTNET, families="dotnet", verdict="reject", reason="no attacks")
+    assert page.post(body)[0].status == 303
+    _, html = page.request("GET")
+    assert f'id="t-{DOTNET.lower()}"' not in html  # settled once out of the window
+    _with(page, lambda s: _kev(s, DOTNET, "2026-11-07"))
+    _, html = page.request("GET")
+    card = _card_html(html, DOTNET)
+    assert "Before the 20 days" in card and "Look again" in card
+    assert "and 1 older still to decide" in html
+
+
+def _packs(tmp_path, pack_text=None):
+    from tests.test_cards import PHP_PACK, _clone
+
+    return _clone(
+        tmp_path,
+        '  - {id: "php2shell-2026-10", version: 1, sha256: "x"}\n',
+        {"php2shell-2026-10": pack_text or PHP_PACK},
+    )
+
+
+def test_a_threat_a_signed_pack_names_reads_covered(page, tmp_path):
+    page.site.packs = _packs(tmp_path)
+    _, html = page.request("GET")
+    card = _card_html(html, PHP[0])
+    assert "Covered" in card and "Undecided" not in card
+    assert "Signed pack <strong>php2shell-2026-10</strong> (version 1) names both CVEs" in card
+    assert "<summary>Decide anyway</summary>" in card and 'action="/decide"' in card
+    assert "to decide" not in html.split("</nav>")[0]
+    # deciding anyway is an ordinary decision, and then shows as one
+    assert (
+        page.post(page.form(verdict="reject", reason="covered by the signed pack"))[0].status == 303
+    )
+    _, html = page.request("GET")
+    card = _card_html(html, PHP[0])
+    assert "Rejected" in card and "Covered" not in card and "Signed pack" in card
+
+
+def test_a_pack_naming_some_of_the_cves_leaves_the_form_open(page, tmp_path):
+    one = "id: php2shell-2026-10\nversion: 1\ncves: [CVE-2026-109618]\n"
+    page.site.packs = _packs(tmp_path, one)
+    _, html = page.request("GET")
+    card = _card_html(html, PHP[0])
+    assert "names CVE-2026-109618, not CVE-2026-109619" in card
+    assert "Undecided" in card and "Decide anyway" not in card and "1 to decide" in html
+
+
+def test_packs_that_cant_be_read_mark_nothing_covered(page, tmp_path):
+    page.site.packs = _packs(tmp_path, "id: someone-else\ncves: [CVE-2026-109618]\n")
+    _, html = page.request("GET")
+    assert "Signed packs couldn't be read" in html and "isn&#39;t the pack" in html
+    assert "Undecided" in _card_html(html, PHP[0])
+    page.site.packs = tmp_path / "gone"
+    _, html = page.request("GET")
+    assert "Signed packs couldn't be read" in html
+
+
+def test_web_wants_a_clone_with_an_index(tmp_path, capsys):
+    assert cli.main(["--home", str(tmp_path), "web", "--packs", str(tmp_path / "nope")]) == 2
+    assert "no index.yaml" in capsys.readouterr().err

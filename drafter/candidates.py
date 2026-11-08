@@ -51,6 +51,9 @@ _RH_EL = re.compile(r"(?:::|\.)el(\d{1,2})")
 _PACKAGE = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._+-]{0,120}\Z")
 # Red Hat's package_state values meaning "affected, no fixed build yet".
 VENDOR_SIGNALS = ("ubuntu", "redhat")  # signal kinds that are a vendor's own rating
+# Signs that someone is attacking it (A.4b): CISA's list, CISA's "active", or a
+# person adding it by hand. A sign of these that comes after a reject brings it back.
+ATTACK_SIGNALS = ("kev", "nvd", "manual")
 _RH_UNFIXED = {"affected", "fix deferred", "will not fix", "under investigation"}
 
 
@@ -319,6 +322,30 @@ def parse_redhat(body: bytes) -> tuple[str | None, list[dict]]:
     return _time_or_none(data.get("public_date")), _unique(packages)
 
 
+MAX_TEXT = 4000  # Red Hat's title and statement, kept cut short; shown escaped
+
+
+def _text_or_none(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = " ".join("".join(ch if ch.isprintable() else " " for ch in value).split())
+    return text[:MAX_TEXT] or None
+
+
+def redhat_text(body: bytes) -> tuple[str | None, str | None]:
+    """Red Hat's own words on a CVE, for its card (A.4b): (bug title, statement).
+    Untrusted text, kept and shown only."""
+    try:
+        data = json.loads(body)
+    except (ValueError, UnicodeDecodeError, RecursionError):
+        return None, None
+    if not isinstance(data, dict):
+        return None, None
+    bug = data.get("bugzilla")
+    title = _text_or_none(bug.get("description")) if isinstance(bug, dict) else None
+    return title, _text_or_none(data.get("statement"))
+
+
 def _time_or_none(value: object) -> str | None:
     try:
         return timeutil.norm(value) if isinstance(value, str) else None
@@ -453,9 +480,11 @@ def reparse(store: Store) -> int:
                 published, packages = parse(body)
             except FeedError:
                 continue
+            title, statement = redhat_text(body) if vendor == "redhat" else (None, None)
             store.db.execute(
-                "UPDATE vendor_cve SET published = ?, packages = ? WHERE cve = ? AND vendor = ?",
-                (published, json.dumps(packages), cve, vendor),
+                "UPDATE vendor_cve SET published = ?, packages = ?, title = ?, statement = ?"
+                " WHERE cve = ? AND vendor = ?",
+                (published, json.dumps(packages), title, statement, cve, vendor),
             )
             count += 1
     return count
@@ -469,7 +498,7 @@ def _refresh_one(ctx: Context, cve: str, vendor: str) -> None:
     except FetchError as exc:
         if exc.status != 404:
             raise
-        found, published, packages = 0, None, []
+        found, published, packages, title, statement = 0, None, [], None, None
         fetch_id = ctx.store.db.execute(
             "SELECT MAX(id) FROM fetches WHERE feed = ? AND url = ?", (feed, url)
         ).fetchone()[0]
@@ -477,6 +506,7 @@ def _refresh_one(ctx: Context, cve: str, vendor: str) -> None:
         found = 1
         parse = parse_ubuntu if vendor == "ubuntu" else parse_redhat
         published, packages = parse(answer.body)
+        title, statement = redhat_text(answer.body) if vendor == "redhat" else (None, None)
     with ctx.store.transaction():
         ctx.store.upsert(
             "vendor_cve",
@@ -489,6 +519,8 @@ def _refresh_one(ctx: Context, cve: str, vendor: str) -> None:
                 "found": found,
                 "published": published,
                 "packages": json.dumps(packages),
+                "title": title,
+                "statement": statement,
                 "fetch_id": fetch_id,
             },
             ("cve", "vendor"),

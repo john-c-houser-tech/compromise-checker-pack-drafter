@@ -5,7 +5,8 @@ Description=Compromise Checker pack drafter: the candidate page
 
 [Service]
 # The same install the hourly timer runs, so the two never disagree on the store.
-ExecStart=%h/.local/share/pack-drafter/venv/bin/drafter web
+# --packs: the local clone of compromise-checker-packs, read only (A.4b).
+ExecStart=%h/.local/share/pack-drafter/venv/bin/drafter web --packs %h/Projects/compromise-checker-packs
 Restart=on-failure
 RestartSec=5
 # It writes the store and nothing else, and needs only IP and local sockets.

@@ -17,7 +17,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 _SCHEMA = """
 CREATE TABLE fetches (
@@ -156,6 +156,42 @@ CREATE TABLE decision (
     reason TEXT NOT NULL CHECK (length(reason) BETWEEN 1 AND 1000),
     decided_by TEXT NOT NULL
 );
+CREATE TRIGGER decision_kept BEFORE UPDATE ON decision
+BEGIN SELECT RAISE(ABORT, 'decisions are append-only'); END;
+CREATE TRIGGER decision_not_removed BEFORE DELETE ON decision
+BEGIN SELECT RAISE(ABORT, 'decisions are append-only'); END;
+""",
+    5: """
+-- A.4b: what a card shows. The CVSS score shown for each CVE (JSON: version,
+-- vector, score, source), and Red Hat's bug title and statement. Filled from the
+-- pages already kept when the store moves up.
+ALTER TABLE nvd ADD COLUMN cvss TEXT;
+ALTER TABLE vendor_cve ADD COLUMN title TEXT;
+ALTER TABLE vendor_cve ADD COLUMN statement TEXT;
+
+-- A.4b: an approve may go without a reason (a reject still needs one), and each
+-- decision keeps the signs of attacks it was made with ("kev:CVE-…", JSON), so a
+-- sign that comes later brings a reject back; NULL for decisions made before.
+-- SQLite can't change a CHECK, so the table is rebuilt with its rows and ids.
+DROP TRIGGER decision_kept;
+DROP TRIGGER decision_not_removed;
+CREATE TABLE decision_5 (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    decided_at TEXT NOT NULL,
+    cves TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    families TEXT NOT NULL,
+    verdict TEXT NOT NULL CHECK (verdict IN ('approve', 'reject')),
+    reason TEXT NOT NULL CHECK (
+        length(reason) <= 1000 AND (verdict = 'approve' OR length(reason) >= 1)
+    ),
+    decided_by TEXT NOT NULL,
+    signs TEXT
+);
+INSERT INTO decision_5 (id, decided_at, cves, kind, families, verdict, reason, decided_by)
+    SELECT id, decided_at, cves, kind, families, verdict, reason, decided_by FROM decision;
+DROP TABLE decision;
+ALTER TABLE decision_5 RENAME TO decision;
 CREATE TRIGGER decision_kept BEFORE UPDATE ON decision
 BEGIN SELECT RAISE(ABORT, 'decisions are append-only'); END;
 CREATE TRIGGER decision_not_removed BEFORE DELETE ON decision
