@@ -1,6 +1,6 @@
 # Pack application build plan — 2026-10-31
 
-> **Status: 2026-11-08.** Stage 1 (A.1–A.3) built; A.4 and A.4b (the decision page) built; A.5 (AI drafts) built and used (six drafts, $0.45); A.6 (text checks) built; A.7 (assembly) built, the first pack (brotli) assembled and signed, its pull request held for the vendor-page check and A.8; A.8 (proof) built (checker #157) and brotli proved and published; A.9 run 2026-11-09, compared in `plans/a9-php2shell-comparison-2026-11-09.md`. D1–D7 settled.
+> **Status: 2026-11-09.** Stage 1 (A.1–A.3) built; A.4 and A.4b (the decision page) built; A.5 (AI drafts) built and used (seven drafts, $0.57); A.6 (text checks) built; A.7 (assembly) built, the first pack (brotli) assembled and signed; A.8 (proof) built (checker #157), and brotli proved, checked against the vendors' pages and published 2026-11-08; A.9 run 2026-11-09, compared in `plans/a9-php2shell-comparison-2026-11-09.md`. D1–D7 settled.
 > Starts from the outline agreed on 2026-10-30, in Compromise Checker's
 > `plans/phase4-build-plan-2026-10-30.md`, "After Phase 4: the pack application".
 
