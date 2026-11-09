@@ -43,6 +43,8 @@ from drafter import (
     timeutil,
     upgrade,
 )
+from drafter.feeds import Context
+from drafter.http import Fetcher
 from drafter.status import needing_a_look
 from drafter.store import Store, StoreError
 
@@ -98,6 +100,7 @@ class Site:
     token: str = field(default_factory=lambda: secrets.token_urlsafe(32))
     now: Callable[[], dt.datetime] = timeutil.now
     fetch_added: Callable = field(default_factory=lambda: added.get)  # B.2's open fetcher
+    feed_fetcher: Callable = field(default_factory=lambda: Fetcher)  # B.1's, for the button
 
     @property
     def store_path(self) -> Path:
@@ -265,7 +268,9 @@ def _sources(store: Store, decision: decisions.Decision) -> dict:
     records = added.listed(store, decision.id)
     texts = [text for _, text, _ in added.pages(store, decision.id)]
     reads = _read_already(store, decision)
-    for link in linked.links(reads):
+    links = linked.links(reads)
+    read = 0
+    for link in links:
         row = store.db.execute(
             "SELECT id FROM fetches WHERE feed = ? AND url = ? AND status = 200"
             " ORDER BY id DESC LIMIT 1",
@@ -278,6 +283,7 @@ def _sources(store: Store, decision: decisions.Decision) -> dict:
                 text = None
             if text:
                 texts.append(text)
+                read += 1
     # Offered unless read already: by hand, or as a linked page the drafter fetches.
     have = {a.url for a in records} | {li.url for li in linked.links(reads)}
     kept = [a for a in records if a.kept]
@@ -287,6 +293,8 @@ def _sources(store: Store, decision: decisions.Decision) -> dict:
         "most": added.MAX_ADDED,
         "room": added.MAX_ADDED - len(kept),
         "further": added.further(texts, have),
+        "linked": len(links),
+        "linked_read": read,
     }
 
 
@@ -608,6 +616,14 @@ def _source_post(handler: Handler, fields: dict[str, str]) -> None:
                                      fetch=site.fetch_added, skip=skip)  # fmt: skip
                     if not done.kept:
                         error = f"Not added: {done.url} couldn't be read ({done.outcome})."
+                elif fields["action"] == "read":
+                    # B.1's own rules: the five kinds, the allowed hosts, at most six,
+                    # each kept as a fetch; nothing goes to the AI.
+                    ctx = Context(store=store, fetcher=site.feed_fetcher(), now=site.now)
+                    got = linked.gather(ctx, _read_already(store, decision))
+                    failed = [x for x in got.left_out if "over the" not in x]
+                    if failed:
+                        error = "Some linked pages couldn't be read: " + "; ".join(failed[:6])
                 elif fields["action"] == "remove":
                     added.take_back(store, decision_id, int(fields.get("added", "0")), site.now)
                 else:

@@ -130,6 +130,12 @@ and keeps them longest when the cap needs room (`docs/draft.md`). A page the dra
 reads already (a vendor's record, or one it links to that the drafter fetches by
 itself) isn't added again; one the linked pages give, one hop further, is offered.
 
+The one-hop list needs the linked pages read. A draft reads them, but so does
+**Read the linked pages** on the card, for nothing: it fetches them by B.1's rules
+(the five kinds, the allowed hosts, at most six, each kept as a fetch, nothing sent
+to the AI), so the list fills before the first draft, and the draft then reads the
+same pages from the store if within the day.
+
 This is the only time the page reaches the network, and only when **Add** is
 pressed, for that one address (`drafter/added.py`):
 

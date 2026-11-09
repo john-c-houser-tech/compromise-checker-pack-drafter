@@ -453,3 +453,23 @@ def test_the_deadline_cuts_a_fetch_whatever_stage_it_is_at(monkeypatch):
 def test_the_name_its_added_under_is_checked(store, approved):
     with pytest.raises(added.AddError, match="1 to 64 printable"):
         added.add(store, approved.id, SANSEC, "x" * 65, lambda: NOW, fetch=_ok)
+
+
+def test_reading_the_linked_pages_fills_the_one_hop_list_for_nothing(page, monkeypatch):  # noqa: F811
+    from drafter import web
+    from tests.conftest import FakeFetcher, ok
+
+    alert = "https://www.cisa.gov/news-events/alerts/2026/10/21/critical-php"
+    monkeypatch.setattr(web, "_read_already", lambda store, decision: {alert})
+    fake = FakeFetcher()
+    fake.add(alert, ok(b"<main><p>See https://github.com/NCSC-NL/php2shell for more.</p></main>",
+                       url=alert))  # fmt: skip
+    page.site.feed_fetcher = lambda: fake
+    page.post(page.form())
+    _, html = page.request("GET")
+    assert "Read the linked pages" in html and "0 of 1 read" in html
+    assert "https://github.com/NCSC-NL/php2shell" not in html
+    response, _ = _post_source(page, _source_form(page, 1, action="read"))
+    assert response.status == 303 and [c["url"] for c in fake.calls] == [alert]
+    _, html = page.request("GET")
+    assert "1 of 1 read" in html and "https://github.com/NCSC-NL/php2shell" in html

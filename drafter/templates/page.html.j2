@@ -120,6 +120,13 @@
         {% endfor %}
         </ul>
         {% endif %}
+        {% if src.linked %}
+        <form class="inline" method="post" action="/source">
+          <input type="hidden" name="token" value="{{ token }}"><input type="hidden" name="decision" value="{{ src.decision }}"><input type="hidden" name="anchor" value="{{ c.anchor }}">
+          <button type="submit" name="action" value="read" class="btn btn-small">Read the linked pages</button>
+        </form>
+        <span class="when">{{ src.linked_read }} of {{ src.linked }} read{% if src.linked_read < src.linked %}: reading them shows what they link to, below, before any draft. Free: nothing goes to the AI.{% endif %}</span>
+        {% endif %}
         {% if src.room > 0 %}
         <form class="add" method="post" action="/source">
           <input type="hidden" name="token" value="{{ token }}"><input type="hidden" name="decision" value="{{ src.decision }}"><input type="hidden" name="anchor" value="{{ c.anchor }}">
