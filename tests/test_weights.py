@@ -117,3 +117,10 @@ def test_a_raise_its_lower_findings_cant_reach_is_a_note():
     out = _checked("- id: wc\n  check: web.worker_child\n  likelihood_ratio: 100\n")
     assert out.problems == []
     assert any("its medium findings rise only to 20" in n for n in out.notes)
+
+
+def test_the_prompt_says_a_php_ini_mitigation_needs_its_default():
+    # B.3 and C.2: answers gave memory_limit and fatal_error_backtraces with no
+    # default, refused by the format, at the cost of a second request each time.
+    assert "Each\n  must give its default" in draft.SYSTEM
+    assert "default no source gives can't be a mitigation" in draft.SYSTEM
