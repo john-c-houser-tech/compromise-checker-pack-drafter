@@ -223,7 +223,7 @@ def linked_sources(pages: list) -> list[Source]:
 
 _LINKED_LINE = re.compile(
     r"^# +Linked page, [^:\n]{1,40}: (?P<url>https://[^\s:]+): fetch (?P<id>\d{1,12}), sha256"
-    r" (?P<sha>[0-9a-f]{64}|\?), ",
+    r" (?P<sha>[0-9a-f]{64}), ",
     re.M,
 )
 
@@ -243,7 +243,7 @@ def drafted_linked(store: Store, draft_text: str) -> list[Source]:
             or row is None
             or row["feed"] != linked.FEED
             or row["url"] != found[0].fetch
-            or (m["sha"] != "?" and row["sha256"] != m["sha"])
+            or row["sha256"] != m["sha"]
         ):
             raise DraftError(f"the draft's linked page {m['url']} isn't kept as fetch {m['id']}")
         body = store.fetch_body(int(m["id"]))
@@ -267,7 +267,7 @@ def room(cves: list[str], found: list[Source]) -> bool:
 
 def fit(cves: list[str], found: list[Source]) -> tuple[list[Source], list[str]]:
     """D10: linked pages left out, the last in D8's order first, until the draft fits
-    per-draft cap (D6). The vendors' own sources are never left out."""
+    the per-draft cap (D6). The vendors' own sources are never left out."""
     vendor = [s for s in found if not s.linked]
     extra = [s for s in found if s.linked]
     dropped = []

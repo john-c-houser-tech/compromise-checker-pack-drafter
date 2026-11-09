@@ -33,7 +33,7 @@ import urllib.parse
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from drafter import textcheck, timeutil
+from drafter import timeutil
 from drafter.http import FetchError
 
 MAX_PAGES = 6  # D8
@@ -133,7 +133,12 @@ def links(urls: set[str] | frozenset[str]) -> list[Link]:
                 if held is None or order[kind.name] < order[held.kind.name]:
                     found[key] = link
                 break
-    return sorted(found.values(), key=lambda li: (order[li.kind.name], li.url))
+    return sorted(found.values(), key=rank)
+
+
+def rank(link: Link) -> tuple[int, str]:
+    """A link's place in D8's order."""
+    return (next(i for i, k in enumerate(KINDS) if k.name == link.kind.name), link.url)
 
 
 # reading a page
@@ -327,6 +332,9 @@ def fetch(ctx, link: Link, row=None, *, offline: bool = False) -> Page:
         if answer.not_modified or not answer.body:
             raise FetchError("an empty answer")
         if urllib.parse.urlsplit(answer.url).hostname != urllib.parse.urlsplit(link.fetch).hostname:
+            # Kept as fetched, but never as a good answer: no later draft reuses it.
+            with ctx.store.transaction():
+                ctx.store.db.execute("UPDATE fetches SET status = 0 WHERE id = ?", (fetch_id,))
             raise FetchError("redirected off its site")
         body, sha, reused = answer.body, None, False
         sha = ctx.store.db.execute(
@@ -393,11 +401,3 @@ def gather(ctx, urls: set[str] | frozenset[str], *, offline: bool = False) -> Ga
         used += size
         out.pages.append(page)
     return out
-
-
-def known_urls(text: str) -> frozenset[str]:
-    """The addresses a page's words give, in every form a reference may take."""
-    found: set[str] = set()
-    for url in textcheck._URL.findall(text):
-        found |= textcheck.url_forms(url)
-    return frozenset(found)

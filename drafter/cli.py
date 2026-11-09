@@ -550,10 +550,11 @@ def _draft_dry(store: Store, args) -> int:
     over: list[str] = []
     if gathered is not None:
         # A page the draft will fetch stands in at its longest, for the estimate.
-        stand_ins = [draft.linked_source(li, "x" * linked.MAX_PAGE, 0, None) for li in pending]
-        found, over = draft.fit(
-            list(decision.cves), found + draft.linked_sources(gathered.pages) + stand_ins
-        )
+        # In D8's order, as the draft will hold them, so the same pages are left out.
+        pages = [(p.link, draft.linked_sources([p])[0]) for p in gathered.pages]
+        pages += [(li, draft.linked_source(li, "x" * linked.MAX_PAGE, 0, None)) for li in pending]
+        pages.sort(key=lambda pair: linked.rank(pair[0]))
+        found, over = draft.fit(list(decision.cves), found + [s for _, s in pages])
         kept = {s.url for s in found}
         pending = [li for li in pending if li.fetch in kept]
         found = [s for s in found if s.fetch_id != 0 or not s.linked]

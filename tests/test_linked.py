@@ -443,3 +443,50 @@ def test_the_cli_draft_fetches_the_linked_pages_and_lists_them(tmp_path, capsys,
     assert [c["url"] for c in fake.calls] == [PHP_A_API]
     assert "upload_progress" in p.sent[0][1]["messages"][0]["content"]
     assert f"Linked page, a project's advisory: {PHP_A}: fetch" in out.read_text()
+
+
+def test_an_off_site_redirect_isnt_reused_later(ctx, fetcher):
+    fetcher.add(ALERT, ok(PAGE, url="https://example.org/elsewhere"))
+    linked.gather(ctx, {ALERT})
+    fetcher.routes.clear()
+    fetcher.add(ALERT, FetchError("HTTP 404", status=404))
+    again = linked.gather(ctx, {ALERT})  # within the day: it must not come from the store
+    assert again.pages == [] and len(fetcher.calls) == 2
+
+
+def test_the_dry_run_leaves_out_what_the_draft_would(tmp_path, capsys, monkeypatch):
+    # a pending project advisory and a cached notice: the notice is the one to go
+    import gzip
+
+    from drafter import decisions
+    from drafter.store import Store
+
+    s = Store(tmp_path / "drafter.sqlite3")
+    _cve(s, CVE)
+    row = s.db.execute("SELECT fetch_id FROM vendor_cve WHERE vendor = 'redhat'").fetchone()
+    record = json.loads(s.fetch_body(row[0]))
+    alerts = [f"https://www.cisa.gov/news-events/alerts/2026/10/2{i}/a" for i in range(3)]
+    record["references"] += [PHP_A, *alerts]
+    s.db.execute("UPDATE fetches SET body = ?, same_as = NULL WHERE id = ?",
+                 (gzip.compress(json.dumps(record).encode()), row[0]))  # fmt: skip
+    s.db.commit()
+    decisions.record(s, _threat(s), "approve", "", "jch", "t1")
+    fake = FakeFetcher()
+    for url in alerts:
+        fake.add(url, ok(b"<p>" + b"w" * 30_000 + b"</p>", url=url))
+    linked.gather(
+        Context(
+            store=s,
+            fetcher=fake,
+            now=lambda: __import__("datetime").datetime.now(__import__("datetime").UTC),
+        ),
+        set(alerts),
+    )  # the alerts are cached, the advisory isn't
+    s.close()
+    monkeypatch.setattr(cli, "Fetcher", lambda: FakeFetcher())
+    monkeypatch.setattr(draft, "PER_DRAFT_CAP", 0.55)  # room for about two full pages
+    assert cli.main(["--home", str(tmp_path), "draft", CVE, "--dry-run"]) == 0
+    out = capsys.readouterr().out
+    assert f"the draft will fetch: {PHP_A} (a project's advisory)" in out
+    assert f"not sent: a CISA alert: {alerts[2]}: over what the" in out
+    assert f"not sent: a project's advisory: {PHP_A}" not in out
