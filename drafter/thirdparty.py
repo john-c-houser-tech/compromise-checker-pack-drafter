@@ -64,6 +64,7 @@ _NS = {
     "common": "http://linux.duke.edu/metadata/common",
     "other": "http://linux.duke.edu/metadata/other",
     "repo": "http://linux.duke.edu/metadata/repo",
+    "rpm": "http://linux.duke.edu/metadata/rpm",
 }
 
 
@@ -154,13 +155,25 @@ _REMI_COLLECTION = re.compile(r"php(\d)(\d)-")
 _REMI_MODULE = re.compile(r"\.module_php\.(\d+\.\d+)\.")
 
 
+_PHP_SOURCE = re.compile(r"php(?:\d\d-php)?")  # PHP's own source: php, or php83-php
+
+
+def remi_source_name(sourcerpm: str) -> str:
+    """php83-php-8.3.36-1.el9.remi.src.rpm -> php83-php; "" when it can't be read."""
+    if not sourcerpm.endswith(".src.rpm"):
+        return ""
+    parts = sourcerpm.removesuffix(".src.rpm").rsplit("-", 2)
+    return parts[0] if len(parts) == 3 else ""
+
+
 def remi_php_branch(name: str, rel: str) -> str | None:
     """The PHP branch a Remi package belongs to: its collection's (php83-php-fpm is
     8.3) or its module stream's (8.3.36-1.module_php.8.3.el9.remi). None when
-    neither says. An extension built for a branch (php83-php-pecl-protobuf 5.36.2)
-    carries its own version, not PHP's: `remi_proposals` leaves those out, since a
-    PHP threat is in PHP's own packages and an extension's version says nothing of
-    PHP's fix."""
+    neither says. `remi_proposals` keeps only builds of PHP's own source package (php,
+    or php83-php) on the branch their version names: an extension built for a
+    branch (php83-php-pecl-protobuf 5.36.2, or php83-php-pecl-ip2location 8.3.0,
+    whose version only looks like PHP's) is another source's code, and its version
+    says nothing of PHP's fix."""
     found = _REMI_COLLECTION.match(name) or _REMI_MODULE.search(rel)
     return ".".join(found.groups()) if found else None
 
@@ -532,6 +545,7 @@ def _remi_metadata(ctx: Context, major: str, repo: str) -> tuple[list[dict], dic
         checksum = pkg.find("common:checksum", _NS)
         name = pkg.findtext("common:name", namespaces=_NS)
         arch = pkg.findtext("common:arch", namespaces=_NS)
+        source = pkg.findtext("common:format/rpm:sourcerpm", default="", namespaces=_NS)
         if version is None or checksum is None or not name or arch not in ("x86_64", "noarch"):
             continue
         packages.append(
@@ -541,6 +555,7 @@ def _remi_metadata(ctx: Context, major: str, repo: str) -> tuple[list[dict], dic
                 "ver": version.get("ver") or "",
                 "rel": version.get("rel") or "",
                 "pkgid": checksum.text or "",
+                "source": remi_source_name(source),
             }
         )
     changelogs: dict[str, list] = {}
@@ -578,6 +593,7 @@ def remi_proposals(
                 report.append(Gap(f"remi {release} {repo}", f"its metadata: {str(exc)[:120]}"))
                 continue
             builds: dict[str, dict[tuple, dict]] = {}  # branch -> (ver, rel) -> build
+            others: set[str] = set()  # matched, but not PHP's own builds
             for p in packages:
                 if not any(fnmatch.fnmatchcase(p["name"], g) for g in config["packages"]):
                     continue
@@ -586,13 +602,31 @@ def remi_proposals(
                 if "remi" not in p["rel"] or not _VERSION.fullmatch(f"{p['ver']}-{p['rel']}"):
                     continue
                 branch = branch_of(p["ver"])
+                if not _PHP_SOURCE.fullmatch(p["source"]):
+                    others.add(p["name"])  # an extension, or no source package shown
+                    continue
                 if remi_php_branch(p["name"], p["rel"]) != branch:
-                    continue  # an extension, at its own version, or no branch shown
+                    others.add(p["name"])  # no branch shown, or not the one its version names
+                    continue
                 build = builds.setdefault(branch, {}).setdefault(
                     (p["ver"], p["rel"]), {"names": set(), "log": [], "epoch": p["epoch"]}
                 )
                 build["names"].add(p["name"])
                 build["log"] = max(build["log"], changelogs.get(p["pkgid"], []), key=len)
+            if others and not builds:
+                # Nothing left that is PHP's own: a changed layout, or the wrong product.
+                report.append(
+                    Gap(
+                        f"remi {release} {repo}",
+                        f"{len(others)} package(s) matched, none of them PHP's own build"
+                        f" (e.g. {', '.join(sorted(others)[:3])})",
+                    )
+                )
+            elif others:
+                report.append(
+                    f"Remi {release} {repo}: {len(others)} package(s) left out, not PHP's own"
+                    " builds (extensions)"
+                )
             for branch in sorted(builds, key=upstream_key):
                 proposals.append(
                     _remi_branch(release, repo, branch, builds[branch], cves, fixed_upstream, major)

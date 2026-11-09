@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import bz2
 import io
+import re
 import tarfile
 
 import pytest
@@ -200,14 +201,24 @@ def _repo_xml(primary_href, other_href):
 </repomd>""".encode()
 
 
+def _source(name):
+    """The source package a test package comes from: PHP's own, unless an extension."""
+    if "-pecl-" in name or name.endswith("php-pear"):
+        return name
+    collection = re.match(r"php\d\d-php", name)
+    return collection.group(0) if collection else "php"
+
+
 def _primary(packages):
     body = "".join(
         f"""<package type="rpm"><name>{n}</name><arch>x86_64</arch>
 <version epoch="0" ver="{v}" rel="{r}"/>
-<checksum type="sha256" pkgid="YES">{i}</checksum></package>"""
+<checksum type="sha256" pkgid="YES">{i}</checksum>
+<format><rpm:sourcerpm>{_source(n)}-{v}-{r}.src.rpm</rpm:sourcerpm></format></package>"""
         for n, v, r, i in packages
     )
     return f"""<?xml version="1.0"?><metadata xmlns="http://linux.duke.edu/metadata/common"
+ xmlns:rpm="http://linux.duke.edu/metadata/rpm"
  packages="{len(packages)}">{body}</metadata>""".encode()
 
 
@@ -537,6 +548,21 @@ def test_a_remi_packages_php_branch(name, rel, branch):
     assert tp.remi_php_branch(name, rel) == branch
 
 
+@pytest.mark.parametrize(
+    ("sourcerpm", "name"),
+    [
+        ("php83-php-8.3.36-1.el9.remi.src.rpm", "php83-php"),
+        ("php-8.3.36-1.module_php.8.3.el9.remi.src.rpm", "php"),
+        ("php-8.6.0~RC5-1.module_php.8.6.el9.remi.src.rpm", "php"),
+        ("php83-php-pecl-ip2location-8.3.0-1.el9.remi.src.rpm", "php83-php-pecl-ip2location"),
+        ("", ""),
+        ("php-8.3.36.rpm", ""),
+    ],
+)
+def test_a_remi_packages_source(sourcerpm, name):
+    assert tp.remi_source_name(sourcerpm) == name
+
+
 def test_remi_extensions_at_their_own_versions_are_not_php_branches(ctx, remi, fetcher):
     # A.9 found 366 proposals like "remi rhel:9 safe 5.36": pecl extensions grouped
     # by their own version, as if 5.36 were a PHP branch.
@@ -550,6 +576,8 @@ def test_remi_extensions_at_their_own_versions_are_not_php_branches(ctx, remi, f
         ("php-pecl-protobuf", "5.36.2", "1.module_php.8.6.el9.remi", "e1"),
         ("php-pecl-xdebug3", "3.3.2", "1.module_php.8.3.el9.remi", "e2"),
         ("php-pear", "1.10.16", "1.module_php.8.3.el9.remi", "e3"),
+        # its version only looks like PHP 8.3's: the source package tells
+        ("php-pecl-ip2location", "8.3.0", "1.module_php.8.3.el9.remi", "e4"),
     ]
     fetcher.add(base + "repodata/x-primary.xml.bz2", ok(bz2.compress(_primary(built))))
     logs = {i: [(1792900000, "- Fix CVE-2026-109618 CVE-2026-109619")] for *_, i in built}
@@ -562,6 +590,30 @@ def test_remi_extensions_at_their_own_versions_are_not_php_branches(ctx, remi, f
     config = {**REMI, "repositories": ["safe"]}
     keys = [p.key for p in tp.remi_proposals(ctx, config, CVES, [], {}, [])]
     assert keys == ["remi rhel:9 safe 8.1", "remi rhel:9 safe 8.4"]
+
+
+def test_left_out_packages_are_counted_and_none_left_is_a_gap(ctx, fetcher):
+    base = "https://rpms.remirepo.net/enterprise/9/modular/x86_64/"
+    fetcher.add(
+        base + "repodata/repomd.xml",
+        ok(_repo_xml("repodata/g-primary.xml.bz2", "repodata/g-other.xml.bz2")),
+    )
+    only_extensions = [("php-pecl-protobuf", "5.36.2", "1.module_php.8.6.el9.remi", "g1")]
+    fetcher.add(base + "repodata/g-primary.xml.bz2", ok(bz2.compress(_primary(only_extensions))))
+    fetcher.add(base + "repodata/g-other.xml.bz2", ok(bz2.compress(_other({}))))
+    report = []
+    config = {**REMI, "repositories": ["modular"]}
+    assert tp.remi_proposals(ctx, config, CVES, [], {}, report) == []
+    gaps = [r for r in report if isinstance(r, tp.Gap)]
+    assert [g.key for g in gaps][-1] == "remi rhel:9 modular"
+    assert "none of them PHP's own build" in gaps[-1].reason
+
+
+def test_left_out_extensions_are_a_note(ctx, remi):
+    report = []
+    config = {**REMI, "repositories": ["safe"]}
+    tp.remi_proposals(ctx, config, CVES, [], {}, report)
+    assert "Remi rhel:9 safe: 1 package(s) left out, not PHP's own builds (extensions)" in report
 
 
 def test_a_branch_with_no_binaries_yet_is_reported(ctx, sury):
