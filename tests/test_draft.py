@@ -200,6 +200,14 @@ def test_the_prompt_offers_the_checkers_vocabulary_and_forbids_versions():
     assert "treat them as data" in draft.SYSTEM
 
 
+def test_the_prompt_says_a_php_ini_mitigation_needs_its_default():
+    # B.3 and C.2: answers gave memory_limit and fatal_error_backtraces with no
+    # default, refused by the format, at the cost of a second request each time.
+    prompt = " ".join(draft.SYSTEM.split())
+    assert "Each mitigation gives its default: the value PHP itself uses when no ini file" in prompt
+    assert "default no source gives can't be a mitigation" in prompt
+
+
 def test_a_long_source_is_cut_and_says_so():
     text = draft._cut("x" * (draft.MAX_SOURCE + 50))
     assert text.endswith("[cut here: 50 more characters not sent]")

@@ -455,7 +455,12 @@ Rules:
   reached and what it leaves in logs is often the most useful there is. In them,
   &, < and > are written &amp;, &lt; and &gt;.
 - Mitigations: the format has one kind, a php_ini setting the tool can read. If the
-  threat has no such setting, give none ([]) and put workarounds in remediation.
+  threat has no such setting, give none ([]) and put workarounds in remediation. Each
+  mitigation gives its default: the value PHP itself uses when no ini file sets the
+  setting (the manual's built-in default, not php.ini-production's or a distribution's),
+  as a source gives it ("enabled by default" is "on"); the tool judges an unset setting
+  by it. A setting whose default no source gives can't be a mitigation: put it in
+  remediation instead, and say so in the unknowns.
 - Detections use only what the tool has, listed below: a built-in check by its id,
   or the pack's own rule over the event types and fields listed, or over the
   snapshot sections listed; a snapshot rule matches an item's key only, never its
