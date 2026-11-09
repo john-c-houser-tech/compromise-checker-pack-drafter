@@ -1,6 +1,6 @@
 # Proposal: detection weights a draft can justify (2026-11-09)
 
-**Status: proposed, waiting for John.**
+**Status: approved as written (John, 2026-11-09). D11 and D12 to settle, one at a time.**
 
 ## The problem
 
