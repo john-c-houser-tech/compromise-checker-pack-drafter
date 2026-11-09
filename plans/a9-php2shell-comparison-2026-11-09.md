@@ -98,3 +98,39 @@ its header. The assembly choices were less so:
   the fixed code).
 - Adding linked advisories and bulletins as sources is the change that would
   have closed most of the gaps above.
+
+## B.3: the same threat again, with the linked pages (2026-11-09)
+
+One draft after B.1 (`drafts/php2shell-b3.draft.yaml`). All five pages PHP2Shell's
+sources link to were sent: PHP's two advisories, two Ubuntu notices and CISA's alert.
+
+**Cost:** $0.38 in two requests. The first answer gave three mitigations, two
+without PHP's default, which the format requires, so it was sent back. The second
+kept one and moved the others to remediation. The first answer used 7,430 output
+tokens of the 8,000 allowed. The total so far is $0.95 of $10.
+
+| | A.9 (vendor records only) | B.3 (with linked pages) | Signed (by hand) |
+|---|---|---|---|
+| Mitigation | none | `session.upload_progress.enabled` off; partial, covers CVE-2026-109619 | the same setting; `covers: [CVE-2026-115560]`, with 109619 in its text |
+| Reach and setups | mod_php vs FPM from Red Hat only | mod_php, FPM through `PHP_VALUE`, php-cgi/LiteSpeed/FrankenPHP "conditional" | in the mitigation and remediation text |
+| Remediation | generic | the advisories' steps: memory_limit=-1 (partial), fatal_error_backtraces off, no RLIMIT_AS, request limits, no per-request overrides, pm.max_requests=1, CISA's take-offline and WAF advice | update and restart; rotate secrets; what the pack can't judge |
+| Detections | 7 built-in, weak weights | 7 built-in plus a rule for bursts of "Maximum execution time" errors; still weak weights (worker-child 20) and no new-script-hit | worker-child 100, new-script-hit 50, php-crash and memory-limit-burst rules |
+| Window and first attacks | no first sighting | still none: no source gives it | 10-20 leak, 10-21 07:43 first attacks (Sansec, Cloudflare) |
+| References | vendor and CISA pages | adds PHP's advisories and CISA's alert | adds RHSB, Sansec, NCSC-NL, AlmaLinux |
+| Title | descriptive | "php2shell: …" (from NCSC-NL's repository name, in CISA's alert) | "PHP2Shell: …" |
+
+**What B.1 closed:**
+- the mitigation;
+- how the flaw is reached;
+- the remediation's substance;
+- the advice that a clean error log proves nothing.
+
+**What it didn't:**
+- **The leak date and first attacks.** No source holds them; that's B.2's added sources.
+- **The detection weights.** Still prompt work, as A.9 said.
+- **The exploit's crash and memory-error rules.** The advisories say exploitation may log nothing predictable, and they don't quote the errors' text.
+- **New-script-hit.** It dropped out of this draft.
+
+**For the reviewer:** the signed pack's mitigation says it covers CVE-2026-115560,
+which isn't one of the pack's CVEs. The draft has it covering CVE-2026-109619. That
+one is worth a look in the signed pack.
