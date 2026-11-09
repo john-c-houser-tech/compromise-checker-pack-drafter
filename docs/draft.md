@@ -156,6 +156,33 @@ CISA, Red Hat, Ubuntu): it reaches the model only inside its source block, a mod
 that obeys a dangerous one is refused, and one that copies a quieter one has it
 listed for the signer.
 
+## Weights (C.1, D11, D12)
+
+The checker uses a pack's weight on one of its own checks only to raise that
+check's findings, while the detection counts, and never by more than one band
+(`docs/scoring.md` in the checker): low (1.5) to 4, medium (4) to 20, high (20) to
+100. A weight at or below the check's band changes nothing. So the instructions give
+each check's bands in brackets (`web.worker_child [medium to high]`), from the
+checker's `docs/checks.md` at the pinned commit (`drafter/vocabulary.py`, kept by
+`scripts/vocabulary.py`, held by a drift test), with that rule and what a raise is
+for. Their one example of a raise comes from no signed pack's threat (a test keeps
+PHP out of that rule). The pack format the instructions also carry is the checker's
+own documentation, and its example is a PHP pack (worker-child at 10, a worker-crash
+rule at 8): a PHP2Shell draft is never quite a blind test.
+
+The answer gives, for each detection, one sentence on why its weight
+(`weights`). Then:
+
+- **a weight past the allowed raise is refused** and sent back once with the reason
+  (D11): the checker would cut it without saying so. Assembly refuses one too, as it
+  shares the check, for a weight a person edits;
+- **a weight at or below the check's lowest band is a note** for the signer: it adds
+  nothing to the score, which may be meant (to tie the sign to the window);
+- **a detection with no reason is a note**, not a refusal: one missing sentence
+  isn't worth a second request;
+- **the reasons go in the draft's header only** (D12), each with its check's band,
+  never into the pack.
+
 ## When an answer is refused
 
 An answer that breaks the reading itself is refused, never a crash: it has been

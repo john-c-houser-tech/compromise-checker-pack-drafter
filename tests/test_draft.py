@@ -109,6 +109,7 @@ GOOD = {
     "remediation": ["Update the system Brotli library and restart the services using it."],
     "references": [f"https://access.redhat.com/security/cve/{CVE}"],
     "unknowns": ["No indicators of compromise are given."],
+    "weights": [{"id": "crash", "why": "A crash alone is weak: clean hosts crash too."}],
 }
 
 
@@ -307,7 +308,14 @@ def test_a_run_killed_mid_request_leaves_its_worst_case(approved_store):
 
 
 def _answer(**changes):
-    return {**GOOD, **changes}
+    """GOOD with changes; a reason for each detection unless the test gives weights."""
+    import re
+
+    answer = {**GOOD, **changes}
+    if "weights" not in changes:
+        ids = re.findall(r"^- id: (\S+)", str(answer["detections_yaml"]), re.M)
+        answer["weights"] = [{"id": i, "why": f"why {i} weighs so"} for i in ids]
+    return answer
 
 
 @pytest.mark.parametrize(
