@@ -38,7 +38,7 @@ reviewed_by = "jch"          # who read the draft, edited it as needed, and stan
 window_start = 2026-10-22T00:00:00Z
 # first_seen_in_wild = …     # with a source of its own
 # window_end = …
-likelihood_ratio = 5         # more than 1, at most 10 (the checker's cap)
+likelihood_ratio = 3         # more than 1, at most 10 (the checker's cap): this threat's own
 binaries = ["brotli", "libbrotli*", "rhel:nodejs"]   # drafter fill --binaries
 other_builds = "cant_judge"
 # packages_from = {rhel = ["CVE-2026-114406"]}   # a family judged from another CVE's data

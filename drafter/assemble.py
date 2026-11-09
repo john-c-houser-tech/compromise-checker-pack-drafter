@@ -996,8 +996,9 @@ def template(store: Store, draft_path: Path, clone_path: Path) -> str:
         f"# CISA listed it on {kev}; a first sighting in the wild needs a source of its own."
         if kev
         else "# No sign of attacks in the wild in the store.",
-        "# first_seen_in_wild = 2026-10-21T00:00:00Z",
-        "# How much exposure weighs, more than 1 and at most 10 (PHP2Shell: 5).",
+        f"# first_seen_in_wild = {start}T00:00:00Z  # replace with the sighting's own time",
+        "# How much exposure weighs: more than 1, at most 10 (the checker's cap), for this threat",
+        "# on its own merits (another pack's weight is no guide).",
         "likelihood_ratio = 0",
         "# Which binaries count (drafter fill --binaries; [] keeps every one, often over the",
         "# checker's 100 entries): `drafter fill CVE…` lists them.",

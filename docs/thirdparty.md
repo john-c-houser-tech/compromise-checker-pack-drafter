@@ -69,8 +69,14 @@ so branches don't overlap. Ubuntu's own patterns never reach Sury's builds (see
 For each branch in the repositories `thirdparty.toml` names (`safe` for the
 `phpNN-php-*` collections, `modular` for the `php:remi-N.N` modules), on RHEL 9 and
 10, the drafter reads Remi's metadata (`primary` and `other`, bzip2). Remi's builds
-are the ones whose release says `remi`. The oldest build listed that is fixed
-becomes the proposal:
+are the ones whose release says `remi`. Only PHP's own builds count: those whose
+source package is `php` or `phpNN-php`. A build's branch is its collection's
+(`php83-php-fpm` is 8.3) or its module stream's (`…module_php.8.3.el9.remi`), and
+must be the one its version names. Extensions (pecl, pear) carry their own versions
+(`php-pecl-protobuf` 5.36.2, or `php83-php-pecl-ip2location` 8.3.0, which only looks
+like PHP's) and are left out, with a count in the run's notes; a repository where
+packages matched but none is PHP's own is a gap. The oldest build listed that is
+fixed becomes the proposal:
 
 - Every CVE has been named in its changelog or an earlier build's (the branches
   Remi patches himself: 7.4, 8.0, 8.1), or
