@@ -27,6 +27,7 @@ import json
 import re
 import socket
 import ssl
+import threading
 import time
 import urllib.parse
 from collections.abc import Callable
@@ -110,7 +111,49 @@ class _Pinned(http.client.HTTPSConnection):
 
     def connect(self) -> None:
         sock = self._make((self._ip, 443), self.timeout)
+        self.raw = sock  # kept, so the deadline can cut it whatever http.client holds
         self.sock = self._context.wrap_socket(sock, server_hostname=self.host)
+
+    def cut(self) -> None:
+        raw = getattr(self, "raw", None)
+        if raw is not None:
+            try:
+                raw.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+
+
+class _Watch:
+    """The whole fetch's deadline, kept by a timer that cuts the connection under way:
+    a server dripping its headers or its body, a byte at a time, is cut off too."""
+
+    def __init__(self, seconds: float):
+        self.expired = False
+        self.conn = None
+        self._lock = threading.Lock()
+        self._timer = threading.Timer(seconds, self._fire)
+        self._timer.daemon = True
+
+    def _fire(self) -> None:
+        with self._lock:
+            self.expired = True
+            cut = getattr(self.conn, "cut", None)
+        if cut:
+            cut()
+
+    def holds(self, conn) -> None:
+        with self._lock:
+            self.conn = conn
+            expired = self.expired
+        if expired:
+            raise FetchError("too slow")
+
+    def __enter__(self):
+        self._timer.start()
+        return self
+
+    def __exit__(self, *exc):
+        self._timer.cancel()
 
 
 def get(
@@ -119,9 +162,15 @@ def get(
     """GET a page from any public https site (B.2's rules, above). `connection(host,
     ip)`: the connection, pinned to the address checked (a test's fake)."""
     deadline = clock() + DEADLINE
+    with _Watch(DEADLINE) as watch:
+        return _get(url, resolve, connection, clock, deadline, watch)
+
+
+def _get(url, resolve, connection, clock, deadline, watch) -> Response:
     for _ in range(MAX_REDIRECTS + 1):
         host, target = check(url)
         conn = connection(host, public_address(host, resolve))
+        watch.holds(conn)
         try:
             conn.request(
                 "GET", target, headers={"User-Agent": USER_AGENT, "Accept": ", ".join(KINDS)}
@@ -139,8 +188,12 @@ def get(
                 said = kind if _TYPE.fullmatch(kind) else "an odd type"
                 raise FetchError(f"not a page of words ({said or 'no type given'})")
             body = _read(conn, answer, deadline, clock)
+            if watch.expired:  # cut short: what came isn't the page
+                raise FetchError("too slow")
             return Response(url=url, status=200, headers={"Content-Type": kind}, body=body)
         except (OSError, http.client.HTTPException, ssl.SSLError) as exc:
+            if watch.expired:
+                raise FetchError("too slow") from None
             raise FetchError(f"couldn't fetch it ({type(exc).__name__})", network=True) from None
         except (UnicodeError, ValueError):
             raise FetchError("not an address that can be read") from None
@@ -243,6 +296,8 @@ def add(store, decision_id: int, url: str, by: str, now, fetch=get, skip=frozens
     happened is kept either way (a failure, as its outcome). `skip`: the addresses
     the drafter reads already (the vendors' records and their linked pages)."""
     url = url.strip()
+    if not by or len(by) > 64 or not by.isprintable():
+        raise AddError("the name it's added under must be 1 to 64 printable characters")
     try:
         check(url)
     except FetchError as exc:
@@ -307,10 +362,12 @@ def kept_text(store, fetch_id: int, read=None) -> str | None:
         body = store.fetch_body(fetch_id)
         if body is None:
             return None
-        if len(_TEXTS) > 256:
+        text = (read or text_of)(body)
+        if len(_TEXTS) > 64:
             _TEXTS.clear()
-        _TEXTS[key] = (read or text_of)(body)
-    return _TEXTS[key]
+        _TEXTS[key] = text
+        return text
+    return _TEXTS.get(key)
 
 
 def pages(store, decision_id: int) -> list[tuple[Added, str, str | None]]:

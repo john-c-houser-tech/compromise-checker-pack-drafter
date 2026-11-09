@@ -429,3 +429,27 @@ def test_a_full_card_says_so(page):  # noqa: F811
     _, html = page.request("GET")
     assert "Sources you added (4 of 4)" in html and "4 added already" in html
     assert 'name="url" required' not in html  # no field while it's full
+
+
+def test_the_deadline_cuts_a_fetch_whatever_stage_it_is_at(monkeypatch):
+    import threading
+
+    monkeypatch.setattr(added, "DEADLINE", 0.2)
+    cut = threading.Event()
+
+    class Dripping(FakeConn):
+        def getresponse(self):
+            cut.wait(5)  # headers that never finish, until the connection is cut
+            raise OSError("cut")
+
+        def cut(self):
+            cut.set()
+
+    with pytest.raises(FetchError, match="too slow"):
+        added.get(SANSEC, resolve=PUBLIC, connection=Dripping([]))
+    assert cut.is_set()
+
+
+def test_the_name_its_added_under_is_checked(store, approved):
+    with pytest.raises(added.AddError, match="1 to 64 printable"):
+        added.add(store, approved.id, SANSEC, "x" * 65, lambda: NOW, fetch=_ok)

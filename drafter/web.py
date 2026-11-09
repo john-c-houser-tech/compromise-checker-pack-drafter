@@ -278,7 +278,8 @@ def _sources(store: Store, decision: decisions.Decision) -> dict:
                 text = None
             if text:
                 texts.append(text)
-    have = {a.url for a in records} | reads | {li.url for li in linked.links(reads)}
+    # Offered unless read already: by hand, or as a linked page the drafter fetches.
+    have = {a.url for a in records} | {li.url for li in linked.links(reads)}
     kept = [a for a in records if a.kept]
     return {
         "decision": decision.id,
@@ -290,8 +291,8 @@ def _sources(store: Store, decision: decisions.Decision) -> dict:
 
 
 def _read_already(store: Store, decision: decisions.Decision) -> set[str]:
-    """The addresses the drafter reads for this threat by itself: the vendors'
-    records' own, whose linked pages it fetches (B.1)."""
+    """The addresses the vendors' records give for this threat: of these, the linked
+    pages of the five kinds are the ones the drafter fetches by itself (B.1)."""
     from drafter import draft
 
     vendor = draft.sources(store, list(decision.cves))
@@ -602,7 +603,7 @@ def _source_post(handler: Handler, fields: dict[str, str]) -> None:
             try:
                 if fields["action"] == "add":
                     reads = _read_already(store, decision)
-                    skip = reads | {li.url for li in linked.links(reads)}
+                    skip = {li.url for li in linked.links(reads)}
                     done = added.add(store, decision_id, fields.get("url", ""), site.by, site.now,
                                      fetch=site.fetch_added, skip=skip)  # fmt: skip
                     if not done.kept:
