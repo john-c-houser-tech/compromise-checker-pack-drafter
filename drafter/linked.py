@@ -203,6 +203,54 @@ class _Text(html.parser.HTMLParser):
             self.main.append(text)
 
 
+class _Links(html.parser.HTMLParser):
+    """A page's links (<a href>), in <main> when it has one."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.all: list[str] = []
+        self.main: list[str] = []
+        self._in_main = 0
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        if tag == "main":
+            self._in_main += 1
+        elif tag == "a":
+            href = dict(attrs).get("href")
+            if href:
+                self.all.append(href)
+                if self._in_main:
+                    self.main.append(href)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "main" and self._in_main:
+            self._in_main -= 1
+
+
+def html_links(body: bytes, base: str) -> list[str]:
+    """The addresses a page links to on other sites, from its main content: for the
+    card's one hop further (B.2), never sent to the AI. A page names most of its links
+    ("NCSC-NL's repository"), so its words alone don't give them."""
+    parser = _Links()
+    parser.feed(body.decode("utf-8", "replace"))
+    parser.close()
+    own = (urllib.parse.urlsplit(base).hostname or "").lower().removeprefix("www.")
+    out: list[str] = []
+    for href in parser.main or parser.all:
+        try:
+            url = urllib.parse.urljoin(base, href.strip())
+            parts = urllib.parse.urlsplit(url)
+            host = (parts.hostname or "").lower().removeprefix("www.")
+        except ValueError:
+            continue
+        if parts.scheme != "https" or not host or host == own:
+            continue
+        url = urllib.parse.urlunsplit(parts._replace(fragment=""))
+        if url not in out:
+            out.append(url)
+    return out
+
+
 def html_text(body: bytes) -> str:
     parser = _Text()
     parser.feed(body.decode("utf-8", "replace"))

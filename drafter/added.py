@@ -352,12 +352,13 @@ def take_back(store, decision_id: int, added_id: int, now) -> None:
         raise AddError("not an added page of this threat")
 
 
-_TEXTS: dict[tuple[str, int], str] = {}  # a fetch's words, by store and fetch id
+_TEXTS: dict[tuple[str, int, str], str] = {}  # a fetch's words, by store and fetch id
 
 
-def kept_text(store, fetch_id: int, read=None) -> str | None:
-    """A kept fetch's words, read once per process (a fetch never changes)."""
-    key = (str(store.path), fetch_id)
+def kept_text(store, fetch_id: int, read=None, kind: str = "words") -> str | None:
+    """A kept fetch's words (or, with `kind`, another reading of it), read once per
+    process: a fetch never changes."""
+    key = (str(store.path), fetch_id, kind)
     if key not in _TEXTS:
         body = store.fetch_body(fetch_id)
         if body is None:

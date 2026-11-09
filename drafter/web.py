@@ -268,6 +268,9 @@ def _sources(store: Store, decision: decisions.Decision, now: dt.datetime) -> di
 
     records = added.listed(store, decision.id)
     texts = [text for _, text, _ in added.pages(store, decision.id)]
+    for a in records:
+        if a.kept:
+            texts.append(_page_links(store, a.fetch_id, a.url) or "")
     reads = _read_already(store, decision)
     links = linked.links(reads)
     ctx = Context(store=store, fetcher=None, now=lambda: now)
@@ -285,6 +288,8 @@ def _sources(store: Store, decision: decisions.Decision, now: dt.datetime) -> di
                 text = None
             if text:
                 texts.append(text)
+            if link.kind.read == "html":
+                texts.append(_page_links(store, row["id"], link.url) or "")
     # Offered unless read already: by hand, or as a linked page the drafter fetches.
     have = {a.url for a in records} | {li.url for li in linked.links(reads)}
     kept = [a for a in records if a.kept]
@@ -297,6 +302,16 @@ def _sources(store: Store, decision: decisions.Decision, now: dt.datetime) -> di
         "linked": min(len(links), linked.MAX_PAGES),  # a draft reads six at most
         "linked_read": read,  # in the last day, as a draft would reuse them
     }
+
+
+def _page_links(store: Store, fetch_id: int, url: str) -> str | None:
+    """The addresses a kept page links to, as one line of text for `added.further`."""
+    try:
+        return added.kept_text(
+            store, fetch_id, lambda body: " ".join(linked.html_links(body, url)), kind="links"
+        )
+    except (ValueError, RecursionError, UnicodeDecodeError, AttributeError, TypeError):
+        return None
 
 
 def _read_already(store: Store, decision: decisions.Decision) -> set[str]:
