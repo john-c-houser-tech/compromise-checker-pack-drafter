@@ -102,6 +102,47 @@
         {% if st.attacked %}<br><strong>Attacks reported since:</strong> {{ st.attacked|join("; ") }}{% endif %}
       </p>
       {% endif %}
+      {% if c.sources %}
+      {% set src = c.sources %}
+      <details class="sources"{% if src.added or kept.anchor == c.anchor %} open{% endif %}><summary>Sources you added ({{ src.added|selectattr("kept")|list|length }} of 4)</summary>
+        <p class="hint">For pages no record links to: a researcher's write-up, a first sighting, a bulletin. Fetched once, now; any https site but private addresses. In the next draft, after the vendors' records and the linked pages.</p>
+        {% if src.added %}
+        <ul class="added">
+        {% for a in src.added %}
+          <li{% if not a.kept %} class="gone"{% endif %}><span class="url">{{ a.url }}</span> <span class="when">added {{ a.added_at[:16]|replace("T", " ") }} UTC by {{ a.added_by }}{% if a.removed_at %}, taken back {{ a.removed_at[:16]|replace("T", " ") }}{% elif a.outcome != "kept" %}: not read ({{ a.outcome }}){% endif %}</span>
+          {% if a.kept %}
+            <form class="inline" method="post" action="/source">
+              <input type="hidden" name="token" value="{{ token }}"><input type="hidden" name="decision" value="{{ src.decision }}"><input type="hidden" name="anchor" value="{{ c.anchor }}"><input type="hidden" name="added" value="{{ a.id }}">
+              <button type="submit" name="action" value="remove" class="btn btn-small">Take back</button>
+            </form>
+          {% endif %}
+          </li>
+        {% endfor %}
+        </ul>
+        {% endif %}
+        {% if src.room > 0 %}
+        <form class="add" method="post" action="/source">
+          <input type="hidden" name="token" value="{{ token }}"><input type="hidden" name="decision" value="{{ src.decision }}"><input type="hidden" name="anchor" value="{{ c.anchor }}">
+          <label for="u-{{ c.anchor }}">Address</label>
+          <input id="u-{{ c.anchor }}" type="url" name="url" required maxlength="2000" placeholder="https://">
+          <button type="submit" name="action" value="add" class="btn btn-small">Add</button>
+        </form>
+        {% if src.further %}
+        <p class="hint">Given by the pages already read, not read themselves:</p>
+        <ul class="further">
+        {% for u in src.further %}
+          <li><form class="inline" method="post" action="/source">
+            <input type="hidden" name="token" value="{{ token }}"><input type="hidden" name="decision" value="{{ src.decision }}"><input type="hidden" name="anchor" value="{{ c.anchor }}"><input type="hidden" name="url" value="{{ u }}">
+            <button type="submit" name="action" value="add" class="btn btn-small">Add</button>
+          </form> <span class="url">{{ u }}</span></li>
+        {% endfor %}
+        </ul>
+        {% endif %}
+        {% else %}
+        <p class="hint">Four added already: take one back to add another.</p>
+        {% endif %}
+      </details>
+      {% endif %}
       {% set mine = kept.anchor == c.anchor %}
       {% set keep = kept.reason if mine else "" %}
       {% set folded = c.covered or not st.open %}

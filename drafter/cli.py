@@ -524,13 +524,14 @@ def _draft_cves(args) -> list[str] | None:
     return cves
 
 
-def _gather(store: Store, found: list, *, offline: bool = False):
+def _gather(store: Store, found: list, *, offline: bool = False, reserved: int = 0):
     """B.1: the linked pages, fetched (or read again from the store) for a draft. A
     dry run reads the store only: it records nothing, so it fetches nothing."""
     from drafter import linked
 
     ctx = Context(store=store, fetcher=Fetcher(), sleep=time.sleep)
-    return linked.gather(ctx, frozenset().union(*(s.urls for s in found)), offline=offline)
+    urls = frozenset().union(*(s.urls for s in found))
+    return linked.gather(ctx, urls, offline=offline, reserved=reserved)
 
 
 def _draft_dry(store: Store, args) -> int:
@@ -545,7 +546,9 @@ def _draft_dry(store: Store, args) -> int:
         print(safe(exc), file=sys.stderr)
         return 1
     found = draft.sources(store, list(decision.cves))
-    gathered = _gather(store, found, offline=True) if found else None
+    by_hand = draft.added_sources(store, decision.id)
+    reserved = sum(len(s.text) for s in by_hand)
+    gathered = _gather(store, found, offline=True, reserved=reserved) if found else None
     pending = gathered.pending if gathered else []
     over: list[str] = []
     if gathered is not None:
@@ -554,7 +557,7 @@ def _draft_dry(store: Store, args) -> int:
         pages = [(p.link, draft.linked_sources([p])[0]) for p in gathered.pages]
         pages += [(li, draft.linked_source(li, "x" * linked.MAX_PAGE, 0, None)) for li in pending]
         pages.sort(key=lambda pair: linked.rank(pair[0]))
-        found, over = draft.fit(list(decision.cves), found + [s for _, s in pages])
+        found, over = draft.fit(list(decision.cves), found + by_hand + [s for _, s in pages])
         kept = {s.url for s in found}
         pending = [li for li in pending if li.fetch in kept]
         found = [s for s in found if s.fetch_id != 0 or not s.linked]
@@ -629,12 +632,15 @@ def _draft(store: Store, args, cves: list[str]) -> int:
     try:
         decision = draft.approved(store, cves)
         found = draft.sources(store, list(decision.cves))
+        by_hand = draft.added_sources(store, decision.id)
+        reserved = sum(len(s.text) for s in by_hand)
         made = draft.draft(
             store,
             cves,
             client,
             past_tell=args.past_tell_mark,
-            gathered=_gather(store, found) if found else None,
+            gathered=_gather(store, found, reserved=reserved) if found else None,
+            added=by_hand,
         )
     except draft.DraftError as exc:
         print(safe(exc), file=sys.stderr)

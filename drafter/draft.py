@@ -32,6 +32,7 @@ from typing import Any
 import yaml
 from pydantic import ValidationError
 
+from drafter import added as added_mod
 from drafter import decisions, linked, textcheck, timeutil, vocabulary
 from drafter.checkerformat import CHECKER_COMMIT
 from drafter.checkerformat import format as packformat
@@ -97,7 +98,8 @@ class Source:
     url: str
     urls: frozenset[str] = frozenset()  # every address in its words, the only references
     plain: str = ""  # its words as written (not as JSON), for looking things up in
-    linked: bool = False  # a page another source links to (B.1), not a vendor record
+    linked: bool = False  # a page another source links to (B.1), or one added (B.2)
+    added: bool = False  # a page a person added (B.2): kept longest under the cap
 
     @property
     def said(self) -> str:
@@ -208,13 +210,28 @@ def linked_source(link, text: str, fetch_id: int, sha256: str | None) -> Source:
     it makes citable: a project's advisory is written by whoever runs the project,
     so the addresses in it aren't vouched for. Cut to what is sent, so every check
     reads what the AI read."""
-    text = f"Address: {link.url}\n{text}"
+    name = f"Linked page, {link.kind.name}: {link.url}"
+    return _page(name, link.url, link.fetch, text, fetch_id, sha256)
+
+
+def _page(name, url, fetched, text, fetch_id, sha256, added=False) -> Source:
+    text = f"Address: {url}\n{text}"
     if len(text) > MAX_SOURCE:
         keep = MAX_SOURCE - len(_CUT_NOTE.format(len(text)))
         text = text[:keep] + _CUT_NOTE.format(len(text) - keep)
-    name = f"Linked page, {link.kind.name}: {link.url}"
-    return Source(name, text, fetch_id, sha256, link.fetch, textcheck.url_forms(link.url), text,
-                  True)  # fmt: skip
+    return Source(name, text, fetch_id, sha256, fetched, textcheck.url_forms(url), text, True,
+                  added)  # fmt: skip
+
+
+def added_source(record, text: str, sha256: str | None) -> Source:
+    """A page a person added (B.2), as a source: like a linked page, its own address
+    the only one it makes citable, and named as added, by whom and when."""
+    name = f"Added by {record.added_by} {record.added_at[:10]}: {record.url}"
+    return _page(name, record.url, record.url, text, record.fetch_id, sha256, added=True)
+
+
+def added_sources(store: Store, decision_id: int) -> list[Source]:
+    return [added_source(a, text, sha) for a, text, sha in added_mod.pages(store, decision_id)]
 
 
 def linked_sources(pages: list) -> list[Source]:
@@ -252,7 +269,28 @@ def drafted_linked(store: Store, draft_text: str) -> list[Source]:
         except (ValueError, RecursionError, UnicodeDecodeError, AttributeError, TypeError):
             raise DraftError(f"the draft's linked page {m['url']} can't be read again") from None
         out.append(linked_source(found[0], text, int(m["id"]), row["sha256"]))
+    for m in _ADDED_LINE.finditer(draft_text):
+        row = store.db.execute(
+            "SELECT feed, url, sha256 FROM fetches WHERE id = ?", (int(m["id"]),)
+        ).fetchone()
+        if (
+            row is None
+            or row["feed"] != added_mod.FEED
+            or row["url"] != m["url"]
+            or (row["sha256"] != m["sha"])
+        ):
+            raise DraftError(f"the draft's added page {m['url']} isn't kept as fetch {m['id']}")
+        record = added_mod.Added(0, m["url"], m["by"], m["day"], int(m["id"]), "kept", None)
+        text = added_mod.text_of(store.fetch_body(int(m["id"])) or b"")
+        out.append(added_source(record, text, row["sha256"]))
     return out
+
+
+_ADDED_LINE = re.compile(
+    r"^# +Added by (?P<by>[^\s:]{1,64}) (?P<day>\d{4}-\d{2}-\d{2}): (?P<url>https://\S+?): fetch"
+    r" (?P<id>\d{1,12}), sha256 (?P<sha>[0-9a-f]{64}), ",
+    re.M,
+)
 
 
 def room(cves: list[str], found: list[Source]) -> bool:
@@ -266,18 +304,20 @@ def room(cves: list[str], found: list[Source]) -> bool:
 
 
 def fit(cves: list[str], found: list[Source]) -> tuple[list[Source], list[str]]:
-    """D10: linked pages left out, the last in D8's order first, until the draft fits
-    the per-draft cap (D6). The vendors' own sources are never left out."""
+    """D10: linked pages left out, the last in D8's order first, then pages a person
+    added, the last added first, until the draft fits the per-draft cap (D6). The
+    vendors' own sources are never left out."""
     vendor = [s for s in found if not s.linked]
-    extra = [s for s in found if s.linked]
+    by_hand = [s for s in found if s.added]
+    extra = [s for s in found if s.linked and not s.added]
     dropped = []
-    while extra and not room(cves, vendor + extra):
-        gone = extra.pop()
+    while (extra or by_hand) and not room(cves, vendor + by_hand + extra):
+        gone = extra.pop() if extra else by_hand.pop()
         dropped.append(
             f"{gone.name.removeprefix('Linked page, ')}: over what the ${PER_DRAFT_CAP:.2f} a"
             " draft may cost leaves room for (a second try included)"
         )
-    return vendor + extra, list(reversed(dropped))
+    return vendor + by_hand + extra, list(reversed(dropped))
 
 
 def _kev_entry(body: bytes | None, cve: str) -> dict | None:
@@ -783,6 +823,7 @@ def draft(
     past_tell: bool = False,
     now=timeutil.now,
     gathered: linked.Gathered | None = None,
+    added: list[Source] | None = None,
 ) -> Draft:
     """Draft an approved threat: at most two requests, each within the caps.
     `names`: package names that would give a package away in prose (default: the
@@ -799,9 +840,10 @@ def draft(
     if not found:
         raise DraftError("nothing fetched about these CVEs to draft from")
     left_out: list[str] = []
-    if gathered is not None:
-        found, over = fit(cves, found + linked_sources(gathered.pages))
-        left_out = list(gathered.left_out) + over
+    if gathered is not None or added:
+        pages = linked_sources(gathered.pages) if gathered else []
+        found, over = fit(cves, found + list(added or []) + pages)
+        left_out = (list(gathered.left_out) if gathered else []) + over
     system = [{"type": "text", "text": SYSTEM, "cache_control": {"type": "ephemeral"}}]
     messages: list[dict] = [{"role": "user", "content": user_message(cves, found)}]
     requests: list[dict] = []

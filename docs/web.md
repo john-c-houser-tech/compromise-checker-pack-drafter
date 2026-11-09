@@ -118,6 +118,31 @@ window, 30 days by default).
   section or package families changed since the page loaded is refused (409);
   the page shows the threat as it now stands, with the reason kept in its box.
 
+## Sources you add (B.2, D9)
+
+An approved threat's card has **Sources you added**: an address field, the pages
+added so far (each with **Take back**), and the addresses the pages already read
+give that nothing has read, each with **Add**. It is for pages no record links to:
+a researcher's write-up, a first sighting, a bulletin whose address isn't given.
+At most four a threat. The next draft sends them after the vendors' records and
+the linked pages, and keeps them longest when the cap needs room (`docs/draft.md`).
+
+This is the only time the page reaches the network, and only when **Add** is
+pressed, for that one address (`drafter/added.py`):
+
+- https on the default port, with no login in the address;
+- every address the name resolves to must be public (never private, loopback,
+  link-local or reserved), and the connection goes to the address checked, so a
+  second lookup can't swap in another;
+- each redirect held to the same, at most five;
+- at most 4 MiB, and only HTML, plain text or JSON;
+- kept as a fetch (feed `added`), and what happened kept too: a page that
+  couldn't be read is listed with why. Nothing is deleted; taking one back is
+  recorded.
+
+The same guards as a decision apply to the form (below), and a source is added
+only to a threat's current approve.
+
 ## Safety
 
 It is for one person on one laptop (plan D7): it listens on 127.0.0.1 only and has

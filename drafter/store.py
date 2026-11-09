@@ -17,7 +17,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 _SCHEMA = """
 CREATE TABLE fetches (
@@ -249,6 +249,29 @@ CREATE TRIGGER pack_assembly_kept BEFORE UPDATE ON pack_assembly
 BEGIN SELECT RAISE(ABORT, 'assemblies are append-only'); END;
 CREATE TRIGGER pack_assembly_not_removed BEFORE DELETE ON pack_assembly
 BEGIN SELECT RAISE(ABORT, 'assemblies are append-only'); END;
+""",
+    8: """
+-- B.2: pages a person added to an approved threat's sources (D9), each fetched when
+-- added and kept as a fetch (feed `added`). A failed one is kept too, with why.
+-- Never deleted; taking one back only sets removed_at.
+CREATE TABLE added_source (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    decision_id INTEGER NOT NULL REFERENCES decision(id),
+    url TEXT NOT NULL,
+    added_by TEXT NOT NULL,
+    added_at TEXT NOT NULL,
+    fetch_id INTEGER REFERENCES fetches(id),
+    outcome TEXT NOT NULL,        -- 'kept', or why it wasn't
+    removed_at TEXT
+);
+CREATE TRIGGER added_source_kept BEFORE DELETE ON added_source
+BEGIN SELECT RAISE(ABORT, 'added sources are kept'); END;
+CREATE TRIGGER added_source_only_removed BEFORE UPDATE ON added_source
+WHEN NEW.id IS NOT OLD.id OR NEW.decision_id IS NOT OLD.decision_id
+  OR NEW.url IS NOT OLD.url OR NEW.added_by IS NOT OLD.added_by
+  OR NEW.added_at IS NOT OLD.added_at OR NEW.fetch_id IS NOT OLD.fetch_id
+  OR NEW.outcome IS NOT OLD.outcome OR OLD.removed_at IS NOT NULL
+BEGIN SELECT RAISE(ABORT, 'an added source is only ever taken back, once'); END;
 """,
 }
 

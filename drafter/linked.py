@@ -358,12 +358,15 @@ class Gathered:
     pending: list[Link] = field(default_factory=list)  # offline: not read in the last day
 
 
-def gather(ctx, urls: set[str] | frozenset[str], *, offline: bool = False) -> Gathered:
+def gather(
+    ctx, urls: set[str] | frozenset[str], *, offline: bool = False, reserved: int = 0
+) -> Gathered:
     """The linked pages for one draft, within D8's six and D10's budget. `offline`
     (a dry run, which records nothing): only pages read in the last day; the rest
-    are `pending`, each counted at its most (MAX_PAGE) against the budget."""
+    are `pending`, each counted at its most (MAX_PAGE) against the budget.
+    `reserved`: the characters a person's added pages take of the budget (B.2)."""
     out = Gathered([], [])
-    used = 0
+    used = reserved
     for link in links(urls):
         if len(out.pages) + len(out.pending) >= MAX_PAGES:
             out.left_out.append(f"{link.url} ({link.kind.name}): over the {MAX_PAGES} a draft")

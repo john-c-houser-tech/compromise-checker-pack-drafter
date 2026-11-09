@@ -8,6 +8,9 @@ can still send a form to it, so a decision is taken only with this page's own
 origin, a token from this run of the server, and a Host it expects (which also
 stops a hostile name being pointed at 127.0.0.1). Everything shown comes from the
 feeds and is escaped; the page runs no scripts, and its policy allows none.
+
+B.2: an approved card's "add a source" form is the one thing that makes the page
+reach the network: once, for the address given, by drafter/added.py's rules.
 """
 
 from __future__ import annotations
@@ -16,6 +19,7 @@ import datetime as dt
 import getpass
 import hmac
 import logging
+import re
 import secrets
 import sqlite3
 import urllib.parse
@@ -28,7 +32,17 @@ from pathlib import Path
 
 import jinja2
 
-from drafter import __version__, candidates, cards, decisions, packs, timeutil, upgrade
+from drafter import (
+    __version__,
+    added,
+    candidates,
+    cards,
+    decisions,
+    linked,
+    packs,
+    timeutil,
+    upgrade,
+)
 from drafter.status import needing_a_look
 from drafter.store import Store, StoreError
 
@@ -83,6 +97,7 @@ class Site:
     packs: Path | None = None  # a local clone of compromise-checker-packs (A.4b)
     token: str = field(default_factory=lambda: secrets.token_urlsafe(32))
     now: Callable[[], dt.datetime] = timeutil.now
+    fetch_added: Callable = field(default_factory=lambda: added.get)  # B.2's open fetcher
 
     @property
     def store_path(self) -> Path:
@@ -205,6 +220,10 @@ def view(site: Site, store: Store) -> dict:
             if group.kind != kind:
                 continue
             card = _card(group, by_cve, listed, older, known, signed)
+            st = card["state"]
+            card["sources"] = (
+                _sources(store, st.decision) if st.word == "approve" and st.decision else None
+            )
             built.append(card)
             if card["decidable"]:
                 shown.append(group)
@@ -236,6 +255,36 @@ def view(site: Site, store: Store) -> dict:
         "history": decided,
         "groups": recent + earlier,
         "shown": shown,
+    }
+
+
+def _sources(store: Store, decision: decisions.Decision) -> dict:
+    """B.2, for an approved threat's card: the pages a person added, and the
+    addresses the pages already read give that nothing has read (one click adds one)."""
+    from drafter import draft
+
+    records = added.listed(store, decision.id)
+    vendor = draft.sources(store, list(decision.cves))
+    urls = frozenset().union(*(s.urls for s in vendor)) if vendor else frozenset()
+    texts = [text for _, text, _ in added.pages(store, decision.id)]
+    for link in linked.links(urls):
+        row = store.db.execute(
+            "SELECT id FROM fetches WHERE feed = ? AND url = ? AND status = 200"
+            " ORDER BY id DESC LIMIT 1",
+            (linked.FEED, link.fetch),
+        ).fetchone()
+        if row is not None:
+            try:
+                texts.append(linked.READ[link.kind.read](store.fetch_body(row["id"]) or b""))
+            except (ValueError, RecursionError, UnicodeDecodeError, AttributeError, TypeError):
+                pass
+    have = {a.url for a in records} | set(urls)
+    kept = [a for a in records if a.kept]
+    return {
+        "decision": decision.id,
+        "added": records,
+        "room": added.MAX_ADDED - len(kept),
+        "further": added.further(texts, have),
     }
 
 
@@ -385,7 +434,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         # Read before any refusal, so the connection is left clean for Caddy.
         raw = self.rfile.read(length)
-        if urllib.parse.urlsplit(self.path).path != "/decide":
+        path = urllib.parse.urlsplit(self.path).path
+        if path not in ("/decide", "/source"):
             self._text(HTTPStatus.NOT_FOUND, "not here")
             return
         why = self._refuse()
@@ -403,6 +453,20 @@ class Handler(BaseHTTPRequestHandler):
             self._text(HTTPStatus.BAD_REQUEST, "the form couldn't be read")
             return
         fields = {name: values[0] for name, values in form.items() if len(values) == 1}
+        if path == "/source":
+            if set(fields) != set(form) or not {"token", "decision", "action", "anchor"} <= set(
+                fields
+            ):
+                self._text(HTTPStatus.BAD_REQUEST, "the form is missing a field")
+                return
+            if not hmac.compare_digest(fields["token"].encode(), self.site.token.encode()):
+                self._text(
+                    HTTPStatus.FORBIDDEN,
+                    "the page is from an earlier run of the server; load it again and add there",
+                )
+                return
+            self._source(fields)
+            return
         if set(fields) != set(form) or not {
             "token",
             "kind",
@@ -422,6 +486,9 @@ class Handler(BaseHTTPRequestHandler):
             )
             return
         self._decide(fields)
+
+    def _source(self, fields: dict[str, str]) -> None:
+        _source_post(self, fields)
 
     def _decide(self, fields: dict[str, str]) -> None:
         try:
@@ -499,6 +566,62 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
         finally:
             store.close()
+
+
+def _source_post(handler: Handler, fields: dict[str, str]) -> None:
+    """B.2: add a page to an approved threat's sources, or take one back."""
+    site = handler.site
+    anchor_to = fields["anchor"] if _ANCHOR.fullmatch(fields["anchor"]) else ""
+    try:
+        decision_id = int(fields["decision"])
+    except ValueError:
+        handler._text(HTTPStatus.BAD_REQUEST, "the form couldn't be read")
+        return
+    try:
+        store = Store(site.store_path)
+    except (StoreError, sqlite3.Error) as exc:
+        handler._text(HTTPStatus.SERVICE_UNAVAILABLE, _unreadable(exc))
+        return
+    try:
+        current = {d.id: d for d in decisions.latest(decisions.history(store)).values()}
+        decision = current.get(decision_id)
+        error = None
+        if decision is None or decision.verdict != "approve":
+            error = "Sources are added to a threat's current approve only; load the page again."
+        else:
+            try:
+                if fields["action"] == "add":
+                    done = added.add(store, decision_id, fields.get("url", ""), site.by, site.now,
+                                     fetch=site.fetch_added)  # fmt: skip
+                    if not done.kept:
+                        error = f"Not added: {done.url} couldn't be read ({done.outcome})."
+                elif fields["action"] == "remove":
+                    added.take_back(store, decision_id, int(fields.get("added", "0")), site.now)
+                else:
+                    error = "Not a thing this form does."
+            except added.AddError as exc:
+                error = f"Not added: {exc}."
+            except ValueError:
+                error = "The form couldn't be read."
+            except sqlite3.OperationalError as exc:
+                error = f"The store is busy (the hourly run?): {exc}. Try again in a moment."
+        if error:
+            handler._html(
+                HTTPStatus.BAD_REQUEST,
+                page(
+                    site, view(site, store), error=error, kept={"anchor": anchor_to, "reason": ""}
+                ),
+            )
+            return
+        handler.send_response(HTTPStatus.SEE_OTHER)
+        handler.send_header("Location", f"/#{anchor_to}")
+        handler.send_header("Content-Length", "0")
+        handler.end_headers()
+    finally:
+        store.close()
+
+
+_ANCHOR = re.compile(r"t-cve-\d{4}-\d{4,9}")
 
 
 def _quoted(reason: str) -> str:
