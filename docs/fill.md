@@ -40,6 +40,22 @@ no build but those listed; the draft and the report then say so.
 Rocky Linux and AlmaLinux rebuilds of Red Hat's fixes fall under the RHEL entries:
 their versions match the same patterns and compare as fixed.
 
+Ubuntu's record gives the **source** package's versions and fix, and each binary's
+own fixed version (`binary_version`). They are usually the same; when a binary's
+differs, its entries use the binary's, since an installed package only ever carries
+that. Ubuntu's .NET builds differ two ways: dotnet8 `8.0.132-8.0.32-0ubuntu1~24.04.1`
+builds aspnetcore-runtime-8.0 `8.0.32-0ubuntu1~24.04.1` (the part after the first
+hyphen) and dotnet-sdk-8.0 `8.0.132-0ubuntu1~24.04.1` (the first part and the
+revision). The listed versions are mapped by whichever of the two turns the source's
+fix into the binary's. Before, the source's versions were written as exact strings no
+installed binary carries, so those hosts read "can't judge".
+
+Any other relation is for a person ("give them by hand"), and the binaries stay named
+with a pattern no build matches (`~unmapped`), so a host with one still reads "can't
+judge" if the gap is accepted. Kernel records raise this for `bpftool`, whose version
+adds its own (`7.7.0+7.0.0-42.42`); kernels aren't judged yet (D2). A record with no
+fix has nothing to map: a binary's version there is only its current build.
+
 ## The `versions` patterns, by rule
 
 The expensive failure is a vulnerable host read as fixed or not affected, so the
