@@ -1,6 +1,6 @@
 # Proposal: sources beyond the vendor records (2026-11-09)
 
-**Status: approved as written (John, 2026-11-09). D8–D10 to settle, one at a time.**
+**Status: approved as written (John, 2026-11-09); D8, D9 and D10 decided the same day. Next: B.1.**
 
 ## The problem
 
@@ -117,5 +117,7 @@ sent.
   addresses? DECIDED (John, 2026-11-09): yes**, with the safeguards in section 2:
   https only, redirects staying on https, never a private or loopback address,
   fetched only when added, the same caps, data not instructions, marked as added.
-- **D10. A shared budget of 100,000 characters for the new pages in each draft?**
-  Recommended: yes, so the $0.50 cap from D6 still holds.
+- **D10. A shared budget of 100,000 characters for the new pages in each draft?
+  DECIDED (John, 2026-11-09): yes**, so the $0.50 cap from D6 still holds. Past it,
+  linked pages go first, from the end of D8's order; pages a person added are kept
+  longest. The header names what was left out.
