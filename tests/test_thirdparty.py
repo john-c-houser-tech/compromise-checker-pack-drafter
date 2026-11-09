@@ -578,6 +578,8 @@ def test_remi_extensions_at_their_own_versions_are_not_php_branches(ctx, remi, f
         ("php-pear", "1.10.16", "1.module_php.8.3.el9.remi", "e3"),
         # its version only looks like PHP 8.3's: the source package tells
         ("php-pecl-ip2location", "8.3.0", "1.module_php.8.3.el9.remi", "e4"),
+        # PHP's own source, but its version isn't the stream's branch: left out
+        ("php-cli", "8.4.1", "1.module_php.8.3.el9.remi", "e5"),
     ]
     fetcher.add(base + "repodata/x-primary.xml.bz2", ok(bz2.compress(_primary(built))))
     logs = {i: [(1792900000, "- Fix CVE-2026-109618 CVE-2026-109619")] for *_, i in built}
@@ -613,7 +615,10 @@ def test_left_out_extensions_are_a_note(ctx, remi):
     report = []
     config = {**REMI, "repositories": ["safe"]}
     tp.remi_proposals(ctx, config, CVES, [], {}, report)
-    assert "Remi rhel:9 safe: 1 package(s) left out, not PHP's own builds (extensions)" in report
+    assert (
+        "Remi rhel:9 safe: 1 package(s) left out, not PHP's own builds"
+        " (extensions, or no source or branch shown)"
+    ) in report
 
 
 def test_a_branch_with_no_binaries_yet_is_reported(ctx, sury):

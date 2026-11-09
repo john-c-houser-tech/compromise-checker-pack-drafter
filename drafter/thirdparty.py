@@ -625,7 +625,7 @@ def remi_proposals(
             elif others:
                 report.append(
                     f"Remi {release} {repo}: {len(others)} package(s) left out, not PHP's own"
-                    " builds (extensions)"
+                    " builds (extensions, or no source or branch shown)"
                 )
             for branch in sorted(builds, key=upstream_key):
                 proposals.append(
