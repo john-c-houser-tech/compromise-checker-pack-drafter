@@ -129,8 +129,8 @@ def test_a_notice_gives_its_words_never_its_package_list():
 
 
 def test_pages_are_fetched_kept_and_read_again_within_a_day(ctx, fetcher):
-    fetcher.add(PHP_A_API, ok(ADVISORY))
-    fetcher.add(ALERT, ok(PAGE))
+    fetcher.add(PHP_A_API, ok(ADVISORY, url=PHP_A_API))
+    fetcher.add(ALERT, ok(PAGE, url=ALERT))
     got = linked.gather(ctx, {PHP_A, ALERT})
     assert [p.link.url for p in got.pages] == [PHP_A, ALERT] and not got.left_out
     assert fetcher.calls[0]["headers"] == {"Accept": "application/vnd.github+json"}
@@ -146,8 +146,8 @@ def test_pages_are_fetched_kept_and_read_again_within_a_day(ctx, fetcher):
 
 def test_a_page_that_cant_be_had_is_left_out_and_said(ctx, fetcher):
     fetcher.add(PHP_A_API, FetchError("HTTP 404", status=404))
-    fetcher.add(USN + ".json", ok(b"<html>not json</html>"))
-    fetcher.add(ALERT, ok(PAGE))
+    fetcher.add(USN + ".json", ok(b"<html>not json</html>", url=USN + ".json"))
+    fetcher.add(ALERT, ok(PAGE, url=ALERT))
     got = linked.gather(ctx, {PHP_A, USN, ALERT})
     assert [p.link.url for p in got.pages] == [ALERT]
     assert got.left_out == [
@@ -161,19 +161,36 @@ def test_a_page_that_cant_be_had_is_left_out_and_said(ctx, fetcher):
     )  # noqa: E501
 
 
-def test_at_most_six_and_within_the_shared_budget(ctx, fetcher):
-    alerts = [f"https://www.cisa.gov/news-events/alerts/2026/10/2{i}/a" for i in range(8)]
-    for url in alerts:
-        fetcher.add(url, ok(b"<p>" + b"x" * 30_000 + b"</p>"))  # each cut at 20,000
+def test_within_the_shared_budget_counting_each_page_as_sent(ctx, fetcher):
+    alerts = [f"https://www.cisa.gov/news-events/alerts/2026/10/2{i}/a" for i in range(7)]
+    for url in alerts[:6]:
+        fetcher.add(url, ok(b"<p>" + b"x" * 18_000 + b"</p>", url=url))
+    fetcher.add(alerts[6], ok(b"<p>short</p>", url=alerts[6]))
     got = linked.gather(ctx, set(alerts))
-    # 20,000 counted for each: five fit in 100,000, the sixth doesn't, two are over six
-    assert [p.link.url for p in got.pages] == alerts[:5]
+    # five of 18,000 make 90,000; a sixth doesn't fit the 100,000, the short one does
+    assert [p.link.url for p in got.pages] == alerts[:5] + [alerts[6]]
     assert got.left_out == [
-        f"{alerts[5]} (a CISA alert): over the 100,000 characters the linked pages share",
-        f"{alerts[6]} (a CISA alert): over the 6 a draft",
+        f"{alerts[5]} (a CISA alert): over the 100,000 characters the linked pages share"
+    ]
+    # a page longer than 20,000 counts as 20,000, as it is sent cut
+    fetcher.routes.clear()
+    big = "https://www.cisa.gov/news-events/alerts/2026/11/01/b"
+    fetcher.add(big, ok(b"<p>" + b"z" * 50_000 + b"</p>", url=big))
+    assert len(linked.gather(ctx, {big} | set(alerts[:4])).pages) == 5
+
+
+def test_six_pages_at_most_and_a_failure_doesnt_use_one(ctx, fetcher):
+    alerts = [f"https://www.cisa.gov/news-events/alerts/2026/10/2{i}/a" for i in range(8)]
+    fetcher.add(alerts[0], FetchError("HTTP 404", status=404))
+    for url in alerts[1:]:
+        fetcher.add(url, ok(b"<p>short</p>", url=url))
+    got = linked.gather(ctx, set(alerts))
+    assert [p.link.url for p in got.pages] == alerts[1:7]
+    assert got.left_out == [
+        f"{alerts[0]} (a CISA alert): HTTP 404",
         f"{alerts[7]} (a CISA alert): over the 6 a draft",
     ]
-    assert len(fetcher.calls) == 6  # the two over six aren't fetched at all
+    assert len(fetcher.calls) == 7  # the one over six isn't fetched at all
 
 
 def test_only_github_and_the_allowed_hosts_are_reached(ctx):
@@ -188,8 +205,8 @@ def test_only_github_and_the_allowed_hosts_are_reached(ctx):
 
 
 def _gathered(ctx, fetcher, *urls):
-    fetcher.add(PHP_A_API, ok(ADVISORY))
-    fetcher.add(USN + ".json", ok(NOTICE))
+    fetcher.add(PHP_A_API, ok(ADVISORY, url=PHP_A_API))
+    fetcher.add(USN + ".json", ok(NOTICE, url=USN + ".json"))
     return linked.gather(ctx, set(urls))
 
 
@@ -226,7 +243,7 @@ def test_without_the_page_the_setting_is_still_refused(approved_store):
 def test_a_linked_notice_doesnt_let_the_answer_name_a_package(approved_store, fetcher):
     ctx = Context(store=approved_store, fetcher=fetcher, now=Clock())
     notice = {**NOTICE, "description": "The dotnet8.0 runtime was updated."}
-    fetcher.add(USN + ".json", ok(notice))
+    fetcher.add(USN + ".json", ok(notice, url=USN + ".json"))
     gathered = linked.gather(ctx, {USN})
     answer = _answer(remediation=["Update dotnet8.0 now."])
     p = Provider(lambda body: message(body, answer), lambda body: message(body))
@@ -236,7 +253,9 @@ def test_a_linked_notice_doesnt_let_the_answer_name_a_package(approved_store, fe
     assert made.ok  # the second answer (GOOD) names none
 
 
-def test_the_cli_dry_run_fetches_the_linked_pages_and_sends_nothing(tmp_path, capsys, monkeypatch):
+def test_the_cli_dry_run_fetches_nothing_and_counts_pages_at_their_most(
+    tmp_path, capsys, monkeypatch
+):
     from drafter import decisions
     from drafter.store import Store
 
@@ -255,20 +274,173 @@ def test_the_cli_dry_run_fetches_the_linked_pages_and_sends_nothing(tmp_path, ca
     decisions.record(s, _threat(s), "approve", "", "jch", "t1")
     s.close()
     fake = FakeFetcher()
-    fake.add(PHP_A_API, ok(ADVISORY))
+    fake.add(PHP_A_API, ok(ADVISORY, url=PHP_A_API))
     monkeypatch.setattr(cli, "Fetcher", lambda: fake)
     assert cli.main(["--home", str(tmp_path), "draft", CVE, "--dry-run"]) == 0
     out = capsys.readouterr().out
     # read-only: nothing fetched, each page counted at its most
     assert not fake.calls
     assert f"the draft will fetch: {PHP_A} (a project's advisory), counted at its most" in out
-    assert f"the draft will fetch: {RHSB} (a Red Hat bulletin)" in out
+    # two pages at their longest don't both fit the cap with a second try's room
+    assert f"not sent: a Red Hat bulletin: {RHSB}: over what the $0.50 a draft may cost" in out
     assert "Nothing sent." in out
 
 
 def test_a_page_read_in_the_last_day_is_used_by_the_dry_run(ctx, fetcher):
-    fetcher.add(PHP_A_API, ok(ADVISORY))
+    fetcher.add(PHP_A_API, ok(ADVISORY, url=PHP_A_API))
     linked.gather(ctx, {PHP_A})
     got = linked.gather(ctx, {PHP_A, ALERT}, offline=True)
     assert [p.link.url for p in got.pages] == [PHP_A] and got.pages[0].reused
     assert [li.url for li in got.pending] == [ALERT] and len(fetcher.calls) == 1
+
+
+def test_an_address_that_cant_be_read_is_passed_over():
+    found = linked.links({"https://example.com:99999/x", "https://a.example:abc/", PHP_A})
+    assert [li.url for li in found] == [PHP_A]
+
+
+def test_odd_addresses_are_not_pages_of_the_five_kinds():
+    assert linked.links({
+        "https://ubuntu.com/security/notices/USN-\u0663\u0664-1",  # Arabic-Indic digits
+        "https://access.redhat.com/security/vulnerabilities/..",
+        "https://access.redhat.com/security/vulnerabilities/.hidden",
+    }) == []  # fmt: skip
+    (alert,) = linked.links({"https://cisa.gov/news-events/alerts/2026/10/21/x"})
+    assert alert.fetch == "https://www.cisa.gov/news-events/alerts/2026/10/21/x"
+
+
+def test_one_advisory_linked_both_ways_takes_one_slot():
+    twin = "https://github.com/advisories/GHSA-6wmf-4rv5-p3rp"
+    (only,) = linked.links({twin, PHP_A})
+    assert only.url == PHP_A and only.fetch == PHP_A_API
+
+
+def test_a_redirect_off_the_pages_site_is_refused(ctx, fetcher):
+    fetcher.add(ALERT, ok(PAGE, url="https://example.org/elsewhere"))
+    got = linked.gather(ctx, {ALERT})
+    assert got.pages == [] and got.left_out == [f"{ALERT} (a CISA alert): redirected off its site"]
+
+
+def test_deeply_nested_json_is_read_quickly():
+    import time
+
+    deep: object = "x"
+    for _ in range(40):  # one child a level: the old reader called itself twice on it
+        deep = {"a": deep}
+    started = time.monotonic()
+    linked.github_text(
+        json.dumps({"summary": "s", "description": "d", "references": [deep]}).encode()
+    )
+    assert time.monotonic() - started < 2
+
+
+def test_a_fetch_stamped_in_the_future_isnt_recent(ctx, fetcher):
+    fetcher.add(ALERT, ok(PAGE, url=ALERT))
+    linked.gather(ctx, {ALERT})
+    ctx.store.db.execute("UPDATE fetches SET fetched_at = '2030-01-01T00:00:00.000000Z'")
+    linked.gather(ctx, {ALERT})
+    assert len(fetcher.calls) == 2
+
+
+def test_a_page_kept_as_a_pointer_to_an_earlier_one_is_read_again(ctx, fetcher):
+    fetcher.add(ALERT, [ok(PAGE, url=ALERT), ok(PAGE, url=ALERT)])
+    linked.gather(ctx, {ALERT})
+    ctx.now.advance(days=2)
+    linked.gather(ctx, {ALERT})  # the same body again: kept as same_as the first
+    ctx.now.advance(hours=1)
+    again = linked.gather(ctx, {ALERT})
+    assert again.pages[0].reused and "Critical vulnerabilities in PHP" in again.pages[0].text
+
+
+def test_a_busy_store_leaves_a_page_out_not_the_draft(ctx, monkeypatch):
+    import sqlite3
+
+    def busy(*a, **k):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(linked, "_recent", busy)
+    got = linked.gather(ctx, {ALERT})
+    assert got.left_out == [f"{ALERT} (a CISA alert): the store was busy"]
+
+
+def test_a_linked_page_vouches_for_its_own_address_only(approved_store, fetcher):
+    ctx = Context(store=approved_store, fetcher=fetcher, now=Clock())
+    fetcher.add(PHP_A_API, ok(ADVISORY, url=PHP_A_API))
+    gathered = linked.gather(ctx, {PHP_A})
+    inside = "https://www.php.net/archive/2026.php"  # in the advisory's words
+    answer = _answer(references=[PHP_A, inside])
+    p = Provider(lambda body: message(body, answer), lambda body: message(body))
+    draft.draft(approved_store, [CVE], p.client(), gathered=gathered)
+    assert (
+        f"a reference that isn't in the sources: {inside}" in p.sent[1][1]["messages"][2]["content"]
+    )
+
+
+def test_what_was_cut_off_a_page_counts_for_nothing():
+    link = linked.links({ALERT})[0]
+    source = draft.linked_source(link, "x" * 30_000 + " session.upload_progress.enabled", 1, None)
+    assert len(source.text) <= draft.MAX_SOURCE and "upload_progress" not in source.said
+    assert source.text.endswith("more characters not sent]")
+
+
+def test_pages_are_left_out_from_the_end_until_the_cap_has_room():
+    vendor = [draft.Source("Red Hat, x", "words " * 2_000, 1, None, "u")]
+    pages = [
+        draft.linked_source(li, "y" * 20_000, i, None)
+        for i, li in enumerate(linked.links({PHP_A, RHSB, USN, ALERT}), start=10)
+    ]
+    kept, over = draft.fit([CVE], vendor + pages)
+    assert kept[0] is vendor[0] and draft.room([CVE], kept)
+    assert [s.name for s in kept[1:]] == [s.name for s in pages[: len(kept) - 1]]
+    assert over and over[-1].startswith(f"a CISA alert: {ALERT}: over what the $0.50")
+    # small pages all fit
+    small = [draft.linked_source(li, "short", 2, None) for li in linked.links({PHP_A, USN})]
+    assert draft.fit([CVE], vendor + small) == (vendor + small, [])
+
+
+def test_assembly_reads_back_the_pages_the_draft_was_made_from(approved_store, fetcher):
+    ctx = Context(store=approved_store, fetcher=fetcher, now=Clock())
+    fetcher.add(PHP_A_API, ok(ADVISORY, url=PHP_A_API))
+    gathered = linked.gather(ctx, {PHP_A})
+    made = draft.draft(approved_store, [CVE], Provider().client(), gathered=gathered)
+    text = draft.render(made, "2026-11-09 10:00 UTC")
+    (back,) = draft.drafted_linked(approved_store, text)
+    sent = next(s for s in made.found if s.linked)
+    assert (back.name, back.text, back.urls) == (sent.name, sent.text, sent.urls)
+    # a header pointing at another fetch is refused, not trusted
+    other = text.replace(f"fetch {sent.fetch_id},", "fetch 1,")
+    with pytest.raises(draft.DraftError, match="isn't kept as fetch 1"):
+        draft.drafted_linked(approved_store, other)
+
+
+def test_the_cli_draft_fetches_the_linked_pages_and_lists_them(tmp_path, capsys, monkeypatch):
+    import gzip
+
+    import anthropic
+
+    from drafter import decisions
+    from drafter.store import Store
+    from tests.test_draft import KEY
+
+    s = Store(tmp_path / "drafter.sqlite3")
+    _cve(s, CVE)
+    row = s.db.execute("SELECT fetch_id FROM vendor_cve WHERE vendor = 'redhat'").fetchone()
+    record = json.loads(s.fetch_body(row[0]))
+    record["references"] += [PHP_A]
+    s.db.execute("UPDATE fetches SET body = ?, same_as = NULL WHERE id = ?",
+                 (gzip.compress(json.dumps(record).encode()), row[0]))  # fmt: skip
+    s.db.commit()
+    decisions.record(s, _threat(s), "approve", "", "jch", "t1")
+    s.close()
+    fake = FakeFetcher()
+    fake.add(PHP_A_API, ok(ADVISORY, url=PHP_A_API))
+    monkeypatch.setattr(cli, "Fetcher", lambda: fake)
+    p = Provider()
+    client = p.client()
+    monkeypatch.setattr(anthropic, "Anthropic", lambda **kw: client)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", KEY)
+    out = tmp_path / "x.draft.yaml"
+    assert cli.main(["--home", str(tmp_path), "draft", CVE, "--out", str(out)]) == 0
+    assert [c["url"] for c in fake.calls] == [PHP_A_API]
+    assert "upload_progress" in p.sent[0][1]["messages"][0]["content"]
+    assert f"Linked page, a project's advisory: {PHP_A}: fetch" in out.read_text()

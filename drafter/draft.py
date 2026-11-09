@@ -51,6 +51,10 @@ TELL_AT = 5.00
 CHARS_PER_TOKEN = 2  # John's estimate for the checker's advisor: rough, and high
 MAX_ATTEMPTS = 2
 MAX_SOURCE = 20_000  # characters of one source; a longer one is cut, and says so
+# For fitting linked pages to the cap (B.1): an answer like the measured one (2,935
+# output tokens), and the retry's own words. A second try must still fit after it.
+TYPICAL_OUTPUT = 3_000
+RETRY_WORDS = 1_000
 
 
 class DraftError(Exception):
@@ -195,17 +199,84 @@ def sources(store: Store, cves: list[str]) -> list[Source]:
     return out
 
 
+_CUT_NOTE = "\n[cut here: {} more characters not sent]"
+
+
+def linked_source(link, text: str, fetch_id: int, sha256: str | None) -> Source:
+    """One of B.1's pages as a source. The address comes first and is the only one
+    it makes citable: a project's advisory is written by whoever runs the project,
+    so the addresses in it aren't vouched for. Cut to what is sent, so every check
+    reads what the AI read."""
+    text = f"Address: {link.url}\n{text}"
+    if len(text) > MAX_SOURCE:
+        keep = MAX_SOURCE - len(_CUT_NOTE.format(len(text)))
+        text = text[:keep] + _CUT_NOTE.format(len(text) - keep)
+    name = f"Linked page, {link.kind.name}: {link.url}"
+    return Source(name, text, fetch_id, sha256, link.fetch, textcheck.url_forms(link.url), text,
+                  True)  # fmt: skip
+
+
 def linked_sources(pages: list) -> list[Source]:
-    """B.1's pages as sources: the address first, so the AI can cite the page itself."""
+    return [linked_source(p.link, p.text, p.fetch_id, p.sha256) for p in pages]
+
+
+_LINKED_LINE = re.compile(
+    r"^# +Linked page, [^:\n]{1,40}: (?P<url>https://[^\s:]+): fetch (?P<id>\d{1,12}), sha256"
+    r" (?P<sha>[0-9a-f]{64}|\?), ",
+    re.M,
+)
+
+
+def drafted_linked(store: Store, draft_text: str) -> list[Source]:
+    """The linked pages a draft file says it was drafted from (its header), read back
+    from the store, so that assembly holds the prose to what the AI read. Each must be
+    the kept answer for its own address, with the sha the header gives."""
     out = []
-    for page in pages:
-        text = f"Address: {page.link.url}\n{page.text}"
-        urls = linked.known_urls(page.text) | textcheck.url_forms(page.link.url)
-        name = f"Linked page, {page.link.kind.name}: {page.link.url}"
-        out.append(
-            Source(name, text, page.fetch_id, page.sha256, page.link.fetch, urls, text, True)
-        )
+    for m in _LINKED_LINE.finditer(draft_text):
+        found = linked.links({m["url"]})
+        row = store.db.execute(
+            "SELECT feed, url, sha256 FROM fetches WHERE id = ?", (int(m["id"]),)
+        ).fetchone()
+        if (
+            len(found) != 1
+            or row is None
+            or row["feed"] != linked.FEED
+            or row["url"] != found[0].fetch
+            or (m["sha"] != "?" and row["sha256"] != m["sha"])
+        ):
+            raise DraftError(f"the draft's linked page {m['url']} isn't kept as fetch {m['id']}")
+        body = store.fetch_body(int(m["id"]))
+        try:
+            text = linked.READ[found[0].kind.read](body or b"")
+        except (ValueError, RecursionError, UnicodeDecodeError, AttributeError, TypeError):
+            raise DraftError(f"the draft's linked page {m['url']} can't be read again") from None
+        out.append(linked_source(found[0], text, int(m["id"]), row["sha256"]))
     return out
+
+
+def room(cves: list[str], found: list[Source]) -> bool:
+    """Whether a draft from these sources fits the cap: its first request at its
+    worst, and, after a typical first answer, a second try at its worst."""
+    tokens = estimate(SYSTEM, [{"role": "user", "content": user_message(cves, found)}])
+    p_in, p_out, p_write, _ = PRICES[MODEL]
+    typical = (tokens * max(p_in, p_write) + TYPICAL_OUTPUT * p_out) / 1e6
+    second = worst_cost(tokens + TYPICAL_OUTPUT + RETRY_WORDS)
+    return worst_cost(tokens) <= PER_DRAFT_CAP and typical + second <= PER_DRAFT_CAP
+
+
+def fit(cves: list[str], found: list[Source]) -> tuple[list[Source], list[str]]:
+    """D10: linked pages left out, the last in D8's order first, until the draft fits
+    the $0.50 cap (D6). The vendors' own sources are never left out."""
+    vendor = [s for s in found if not s.linked]
+    extra = [s for s in found if s.linked]
+    dropped = []
+    while extra and not room(cves, vendor + extra):
+        gone = extra.pop()
+        dropped.append(
+            f"{gone.name.removeprefix('Linked page, ')}: over what the ${PER_DRAFT_CAP:.2f} a"
+            " draft may cost leaves room for (a second try included)"
+        )
+    return vendor + extra, list(reversed(dropped))
 
 
 def _kev_entry(body: bytes | None, cve: str) -> dict | None:
@@ -728,8 +799,8 @@ def draft(
         raise DraftError("nothing fetched about these CVEs to draft from")
     left_out: list[str] = []
     if gathered is not None:
-        found = found + linked_sources(gathered.pages)
-        left_out = list(gathered.left_out)
+        found, over = fit(cves, found + linked_sources(gathered.pages))
+        left_out = list(gathered.left_out) + over
     system = [{"type": "text", "text": SYSTEM, "cache_control": {"type": "ephemeral"}}]
     messages: list[dict] = [{"role": "user", "content": user_message(cves, found)}]
     requests: list[dict] = []

@@ -28,6 +28,7 @@ import datetime as dt
 import html.parser
 import json
 import re
+import sqlite3
 import urllib.parse
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -58,7 +59,8 @@ KINDS = (
     Kind(
         "a project's advisory",
         re.compile(
-            rf"github\.com/(?P<owner>{_NAME})/(?P<repo>{_NAME})/security/advisories/(?P<id>{_GHSA})"
+            rf"github\.com/(?P<owner>{_NAME})/(?P<repo>{_NAME})/security/advisories/(?P<id>{_GHSA})",
+            re.ASCII,
         ),
         lambda m: (
             f"https://api.github.com/repos/{m['owner']}/{m['repo']}/security-advisories/{m['id']}"
@@ -67,26 +69,32 @@ KINDS = (
     ),
     Kind(
         "a reviewed advisory",
-        re.compile(rf"github\.com/advisories/(?P<id>{_GHSA})"),
+        re.compile(rf"github\.com/advisories/(?P<id>{_GHSA})", re.ASCII),
         lambda m: f"https://api.github.com/advisories/{m['id']}",
         "github",
     ),
     Kind(
         "a Red Hat bulletin",
-        re.compile(r"access\.redhat\.com/security/vulnerabilities/[A-Za-z0-9._-]{1,120}"),
+        re.compile(
+            r"access\.redhat\.com/security/vulnerabilities/[A-Za-z0-9][A-Za-z0-9_-]{0,119}",
+            re.ASCII,
+        ),
         None,
         "html",
     ),
     Kind(
         "an Ubuntu notice",
-        re.compile(r"ubuntu\.com/security/notices/(?P<id>USN-\d{1,6}-\d{1,3})"),
+        re.compile(r"ubuntu\.com/security/notices/(?P<id>USN-\d{1,6}-\d{1,3})", re.ASCII),
         lambda m: f"https://ubuntu.com/security/notices/{m['id']}.json",
         "usn",
     ),
     Kind(
         "a CISA alert",
-        re.compile(r"www\.cisa\.gov/news-events/alerts/\d{4}/\d{2}/\d{2}/[a-z0-9-]{1,200}"),
-        None,
+        re.compile(
+            r"(?:www\.)?cisa\.gov/(?P<path>news-events/alerts/\d{4}/\d{2}/\d{2}/[a-z0-9-]{1,200})",
+            re.ASCII,
+        ),
+        lambda m: f"https://www.cisa.gov/{m['path']}",
         "html",
     ),
 )
@@ -100,22 +108,31 @@ class Link:
 
 
 def links(urls: set[str] | frozenset[str]) -> list[Link]:
-    """The links of the five kinds, in D8's order, each page once."""
+    """The links of the five kinds, in D8's order, each page once: a GitHub advisory
+    linked both as the project's and as a reviewed one is the project's. An address
+    that can't be read (a port of 99999) is passed over, never a stop."""
+    order = {k.name: i for i, k in enumerate(KINDS)}
     found: dict[str, Link] = {}
-    for url in urls:
-        parts = urllib.parse.urlsplit(url)
-        if parts.scheme != "https" or parts.port not in (None, 443) or parts.username:
+    for url in sorted(urls):
+        try:
+            parts = urllib.parse.urlsplit(url)
+            if parts.scheme != "https" or parts.port not in (None, 443) or parts.username:
+                continue
+        except ValueError:
             continue
         host = (parts.hostname or "").lower()
         path = parts.path.rstrip("/")
         for kind in KINDS:
             m = kind.pattern.fullmatch(host + path)
             if m:
-                link = f"https://{host}{path}"
-                address = kind.api(m) if kind.api else link
-                found.setdefault(address, Link(kind, link, address))
+                link = Link(kind, f"https://{host}{path}", kind.api(m) if kind.api else "")
+                if not link.fetch:
+                    link = Link(kind, link.url, link.url)
+                key = m["id"] if kind.read == "github" else link.fetch
+                held = found.get(key)
+                if held is None or order[kind.name] < order[held.kind.name]:
+                    found[key] = link
                 break
-    order = {k.name: i for i, k in enumerate(KINDS)}
     return sorted(found.values(), key=lambda li: (order[li.kind.name], li.url))
 
 
@@ -139,6 +156,7 @@ class _Text(html.parser.HTMLParser):
         self._skip = 0
         self._in_main = 0
         self._stack: list[str] = []
+        self._open: dict[str, int] = {}  # how many of each tag the stack holds
 
     def handle_starttag(self, tag: str, attrs) -> None:
         if tag in _VOID:
@@ -146,6 +164,7 @@ class _Text(html.parser.HTMLParser):
                 self._add("\n")
             return
         self._stack.append(tag)
+        self._open[tag] = self._open.get(tag, 0) + 1
         if tag in _SKIP:
             self._skip += 1
         if tag == "main":
@@ -154,10 +173,11 @@ class _Text(html.parser.HTMLParser):
             self._add("\n")
 
     def handle_endtag(self, tag: str) -> None:
-        if tag not in self._stack:
+        if not self._open.get(tag):
             return  # a stray end tag
         while self._stack:
             open_tag = self._stack.pop()
+            self._open[open_tag] -= 1
             if open_tag in _SKIP:
                 self._skip -= 1
             if open_tag == "main":
@@ -197,7 +217,8 @@ def _strings(value: object) -> str:
     if isinstance(value, list):
         return "\n".join(s for s in (_strings(v) for v in value) if s)
     if isinstance(value, dict):
-        return "\n".join(f"{k}: {_strings(v)}" for k, v in value.items() if _strings(v))
+        pairs = ((k, _strings(v)) for k, v in value.items())
+        return "\n".join(f"{k}: {text}" for k, text in pairs if text)
     return str(value)
 
 
@@ -250,7 +271,7 @@ def usn_text(body: bytes) -> str:
     )
 
 
-_READ = {"github": github_text, "usn": usn_text, "html": html_text}
+READ = {"github": github_text, "usn": usn_text, "html": html_text}
 _HEADERS = {"github": {"Accept": "application/vnd.github+json"}}
 
 
@@ -279,15 +300,19 @@ def _recent(ctx, address: str):
         when = timeutil.parse(row["fetched_at"])
     except ValueError:
         return None
-    if ctx.now() - when > REUSE_FOR:
-        return None
+    age = ctx.now() - when
+    if age > REUSE_FOR or age < -dt.timedelta(minutes=5):
+        return None  # old, or stamped in the future: not to be trusted as recent
     return row
 
 
-def fetch(ctx, link: Link) -> Page:
-    """Read one page, from the store if it was read in the last day. Raises
-    FetchError or ValueError (never with the page's own text)."""
-    row = _recent(ctx, link.fetch)
+def fetch(ctx, link: Link, row=None, *, offline: bool = False) -> Page:
+    """Read one page, from the store if it was read in the last day (`row`, when the
+    caller has looked already). Raises FetchError or ValueError (never with the
+    page's own text). `offline`: never from the web."""
+    row = row if row is not None else _recent(ctx, link.fetch)
+    if row is None and offline:
+        raise FetchError("not read in the last day")
     if row is not None:
         body, fetch_id, sha, reused = (
             ctx.store.fetch_body(row["id"]),
@@ -301,6 +326,8 @@ def fetch(ctx, link: Link) -> Page:
         )
         if answer.not_modified or not answer.body:
             raise FetchError("an empty answer")
+        if urllib.parse.urlsplit(answer.url).hostname != urllib.parse.urlsplit(link.fetch).hostname:
+            raise FetchError("redirected off its site")
         body, sha, reused = answer.body, None, False
         sha = ctx.store.db.execute(
             "SELECT sha256 FROM fetches WHERE id = ?", (fetch_id,)
@@ -308,7 +335,7 @@ def fetch(ctx, link: Link) -> Page:
     if body is None:
         raise FetchError("its answer isn't kept")
     try:
-        text = _READ[link.kind.read](body)
+        text = READ[link.kind.read](body)
     except (ValueError, RecursionError, UnicodeDecodeError, AttributeError, TypeError):
         raise ValueError("its answer couldn't be read") from None
     if not text.strip():
@@ -329,11 +356,16 @@ def gather(ctx, urls: set[str] | frozenset[str], *, offline: bool = False) -> Ga
     are `pending`, each counted at its most (MAX_PAGE) against the budget."""
     out = Gathered([], [])
     used = 0
-    for i, link in enumerate(links(urls)):
-        if i >= MAX_PAGES:
+    for link in links(urls):
+        if len(out.pages) + len(out.pending) >= MAX_PAGES:
             out.left_out.append(f"{link.url} ({link.kind.name}): over the {MAX_PAGES} a draft")
             continue
-        if offline and _recent(ctx, link.fetch) is None:
+        try:
+            row = _recent(ctx, link.fetch)
+        except sqlite3.OperationalError:
+            out.left_out.append(f"{link.url} ({link.kind.name}): the store was busy")
+            continue
+        if offline and row is None:
             if used + MAX_PAGE > BUDGET:
                 out.left_out.append(
                     f"{link.url} ({link.kind.name}): over the {BUDGET:,} characters the linked"
@@ -344,9 +376,12 @@ def gather(ctx, urls: set[str] | frozenset[str], *, offline: bool = False) -> Ga
             out.pending.append(link)
             continue
         try:
-            page = fetch(ctx, link)
+            page = fetch(ctx, link, row, offline=offline)
         except (FetchError, ValueError) as exc:
             out.left_out.append(f"{link.url} ({link.kind.name}): {str(exc)[:120]}")
+            continue
+        except sqlite3.OperationalError:
+            out.left_out.append(f"{link.url} ({link.kind.name}): the store was busy")
             continue
         size = min(len(page.text), MAX_PAGE)
         if used + size > BUDGET:

@@ -260,6 +260,7 @@ class Reviewed:
     parts: dict[str, Any]  # title, mitigations, detections, remediation, references
     sha256: str
     decision_id: int | None = None  # the approve it was drafted under
+    text: str = ""  # the file as read, for its header (the linked pages, B.1)
 
 
 _CVES_LINE = re.compile(
@@ -295,6 +296,7 @@ def read_draft(path: Path) -> Reviewed:
         parts,
         hashlib.sha256(data).hexdigest(),
         int(found.group(2)) if found.group(2) else None,
+        text,
     )
 
 
@@ -738,7 +740,13 @@ def write(
             "an entry's source isn't an address the pack can carry (fill wrote"
             f" {PLACEHOLDER}): give it by hand"
         )
-    found = drafting.sources(store, reviewed.cves)
+    try:
+        # The vendors' records and the linked pages the draft was made from (B.1).
+        found = drafting.sources(store, reviewed.cves) + drafting.drafted_linked(
+            store, reviewed.text
+        )
+    except drafting.DraftError as exc:
+        raise AssembleError(str(exc)) from None
     notes = check_text(text, reviewed, found) + _reference_notes(
         reviewed.parts["references"], found
     )

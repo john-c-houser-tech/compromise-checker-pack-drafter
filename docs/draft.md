@@ -38,19 +38,35 @@ JSON shape (structured output). It holds:
   its `<`, `>` and `&` are escaped, so it can't close its block or pose as another.
 - **the pages they link to (B.1)**, of five kinds only (D8), in this order: a
   project's GitHub security advisory and a reviewed GitHub advisory (through GitHub's
-  API, as JSON), a Red Hat security bulletin, an Ubuntu security notice (Ubuntu's
-  JSON, without its package list) and a CISA alert (the page's own words, not its
-  menus or scripts). At most six, sharing 100,000 characters (D10); one past either,
-  or one that can't be fetched or read, is left out and named in the dry run and the
-  draft's header. Each starts with its address, which may be cited. A page read in the
-  last day is read again from the store (feed `linked`), so a draft reads what its dry
-  run did. Its words count for every check, except that a package a linked notice
-  names doesn't become one the answer may name: only the vendors' own records allow
-  that. `drafter/linked.py`.
+  API, as JSON; one linked both ways is read once, as the project's), a Red Hat
+  security bulletin, an Ubuntu security notice (Ubuntu's JSON, without its package
+  list) and a CISA alert (the page's own words, not its menus or scripts). At most six
+  are read (a page that can't be fetched or read doesn't use one), sharing 100,000
+  characters (D10), each counted as sent, cut at 20,000. A redirect may not leave the
+  page's site. A page read in the last day is read again from the store (feed
+  `linked`), so a draft reads what its dry run did, if within the day.
+  `drafter/linked.py`.
+
+  Then the cap: linked pages are left out, the last in D8's order first, until the
+  draft fits the $0.50 a draft may cost (D6) with room for a second try after a
+  typical first answer (`draft.fit`). The drafter's estimate is high on purpose (2
+  characters a token), so this leaves out more than the real cost would: PHP2Shell's
+  five linked pages keep PHP's two advisories and one notice. Everything left out,
+  and why, is named in the draft's header.
+
+  Each page starts with its address, the only address it makes citable: a project's
+  advisory is written by whoever runs the project, so the addresses in it aren't
+  vouched for. Its words, as sent (never what was cut off), count for the A.6 checks:
+  a setting or command in it may be used. A package a linked notice names doesn't
+  become one the answer may name: only the vendors' own records allow that.
+  Assembly (`drafter pack write`) reads the same pages back from the store, by the
+  fetch numbers in the draft's header, and holds the prose to them too.
 
 `--dry-run` reads the store and nothing else: it fetches no page. One not read in
-the last day is listed as one the draft will fetch, and counted at its most, 20,000
-characters, so the cost it shows is still the most a request could cost.
+the last day is listed as one the draft will fetch, and stands in at 20,000
+characters for the estimate and the cap. That is an estimate, not a bound (a page's
+escaped characters can make it longer): the draft checks the caps again with the
+real pages before anything is sent.
 
 The sources are fetched text, untrusted. The instructions say so, the model has no
 tools to act with, and what comes back is checked before anyone reads it.
