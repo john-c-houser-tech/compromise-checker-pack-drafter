@@ -8,9 +8,10 @@ the checker's own pack format (pinned in drafter.checkerformat) and against the
 vocabulary the checker has (drafter.vocabulary); a refused answer is sent back once
 with its problems, then the draft stops.
 
-Spending (D6, John, 2026-11-08): Claude Opus 5.5; at most $0.50 a draft and $10 for
-the plan, stopping to tell John at $5. Each request is recorded before it is sent,
-at the most it could cost, and settled with the real figures after; a request is
+Spending (D6, John, 2026-11-08; the per-draft cap raised to $0.75 on 2026-11-09 for
+B.1's linked pages): Claude Opus 5.5; at most $0.75 a draft and $10 for the plan,
+stopping to tell John at $5. Each request is recorded before it is sent, at the most
+it could cost, and settled with the real figures after; a request is
 sent only if that worst case fits both caps. A refusal by the model is recorded and
 reported; no other model is tried (one could cost more than the caps allow for).
 
@@ -41,11 +42,11 @@ MODEL = "claude-opus-5-5"
 EFFORT = "high"
 # Output allowed a request, thinking included: the measured draft used 2,935. Kept
 # low enough that a request's worst case (all of it used) leaves room for a second
-# try within the $0.50 a draft may cost.
+# try within what a draft may cost.
 MAX_TOKENS = 8_000
 # $ per million tokens: input, output, cache write (5 minutes), cache read.
 PRICES = {"claude-opus-5-5": (4.00, 20.00, 5.00, 0.20)}
-PER_DRAFT_CAP = 0.50
+PER_DRAFT_CAP = 0.75  # D6, raised from $0.50 for B.1 (John, 2026-11-09)
 TOTAL_CAP = 10.00
 TELL_AT = 5.00
 CHARS_PER_TOKEN = 2  # John's estimate for the checker's advisor: rough, and high
@@ -266,7 +267,7 @@ def room(cves: list[str], found: list[Source]) -> bool:
 
 def fit(cves: list[str], found: list[Source]) -> tuple[list[Source], list[str]]:
     """D10: linked pages left out, the last in D8's order first, until the draft fits
-    the $0.50 cap (D6). The vendors' own sources are never left out."""
+    per-draft cap (D6). The vendors' own sources are never left out."""
     vendor = [s for s in found if not s.linked]
     extra = [s for s in found if s.linked]
     dropped = []

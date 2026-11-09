@@ -48,11 +48,11 @@ JSON shape (structured output). It holds:
   `drafter/linked.py`.
 
   Then the cap: linked pages are left out, the last in D8's order first, until the
-  draft fits the $0.50 a draft may cost (D6) with room for a second try after a
+  draft fits the $0.75 a draft may cost (D6) with room for a second try after a
   typical first answer (`draft.fit`). The drafter's estimate is high on purpose (2
-  characters a token), so this leaves out more than the real cost would: PHP2Shell's
-  five linked pages keep PHP's two advisories and one notice. Everything left out,
-  and why, is named in the draft's header.
+  characters a token), so this leaves out more than the real cost would; under it
+  about 65,000 characters of linked pages fit, and all five of PHP2Shell's (about
+  24,000). Everything left out, and why, is named in the draft's header.
 
   Each page starts with its address, the only address it makes citable: a project's
   advisory is written by whoever runs the project, so the addresses in it aren't
@@ -165,7 +165,9 @@ Measured first: one brotli draft cost $0.093 on Opus 5.5 and $0.044 on Sonnet 5.
 from the same input (about 8,500 tokens in, 3,000 out); Opus was the more accurate.
 
 - **Model:** Claude Opus 5.5.
-- **At most $0.50 a draft**, both requests together.
+- **At most $0.75 a draft**, both requests together. It was $0.50 until B.1: with
+  the linked pages and room for a second try, about 40,000 characters of them fitted
+  (John raised it, 2026-11-09). A real draft still costs about $0.15 to $0.20.
 - **At most $10 for the plan**, and the drafter stops before a request that could
   take the total past **$5** and says so: John asked to be told then.
   `--past-tell-mark` goes on, once he has said so.
@@ -174,7 +176,7 @@ A request is sent only if its worst case fits both caps: input estimated at two
 characters a token (high, on purpose), plus, for a second try, every token the first
 answer used (its thinking is sent back and billed, though its text comes back empty), all of it billed as a cache write, and every
 one of the 8,000 output tokens allowed used (the measured draft used 2,935, thinking
-included; a lower allowance leaves room within $0.50 for a second try). An answer cut
+included; a lower allowance leaves room within the cap for a second try). An answer cut
 off at the allowance (`max_tokens`) is recorded and reported, not tried again. Each request is recorded in the store before
 it is sent, at that worst case, then settled with the real figures. A request that
 got no answer (a timeout, a dropped connection) keeps its worst case, since it may

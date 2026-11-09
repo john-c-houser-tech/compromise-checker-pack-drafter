@@ -232,7 +232,7 @@ def test_a_threat_is_drafted_whole_as_approved(store):
 def test_a_request_that_could_pass_the_per_draft_cap_isnt_sent(approved_store, monkeypatch):
     monkeypatch.setattr(draft, "MAX_TOKENS", 40_000)  # at most $0.80 out alone
     p = Provider()
-    with pytest.raises(draft.DraftError, match=r"over the \$0.50 a draft may cost"):
+    with pytest.raises(draft.DraftError, match=r"over the \$0.75 a draft may cost"):
         _run(approved_store, p)
     assert p.sent == [] and draft.ledger(approved_store) == []
 
@@ -430,9 +430,9 @@ def test_a_refusal_is_recorded_and_nothing_else_is_tried(approved_store):
 
 def test_a_second_try_that_could_pass_the_cap_isnt_sent(approved_store):
     bad = _answer(remediation=["Upgrade to 1.2.1."])
-    # A first answer that cost $0.30: a second at its worst would pass $0.50.
+    # A first answer that cost $0.50: a second at its worst would pass $0.75.
     p = Provider(
-        lambda body: message(body, bad, usage={"input_tokens": 0, "output_tokens": 15_000})
+        lambda body: message(body, bad, usage={"input_tokens": 0, "output_tokens": 25_000})
     )
     made = _run(approved_store, p)
     assert len(p.sent) == 1 and not made.ok

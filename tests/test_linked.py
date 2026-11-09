@@ -281,8 +281,7 @@ def test_the_cli_dry_run_fetches_nothing_and_counts_pages_at_their_most(
     # read-only: nothing fetched, each page counted at its most
     assert not fake.calls
     assert f"the draft will fetch: {PHP_A} (a project's advisory), counted at its most" in out
-    # two pages at their longest don't both fit the cap with a second try's room
-    assert f"not sent: a Red Hat bulletin: {RHSB}: over what the $0.50 a draft may cost" in out
+    assert f"the draft will fetch: {RHSB} (a Red Hat bulletin)" in out  # both fit $0.75
     assert "Nothing sent." in out
 
 
@@ -392,7 +391,7 @@ def test_pages_are_left_out_from_the_end_until_the_cap_has_room():
     kept, over = draft.fit([CVE], vendor + pages)
     assert kept[0] is vendor[0] and draft.room([CVE], kept)
     assert [s.name for s in kept[1:]] == [s.name for s in pages[: len(kept) - 1]]
-    assert over and over[-1].startswith(f"a CISA alert: {ALERT}: over what the $0.50")
+    assert over and over[-1].startswith(f"a CISA alert: {ALERT}: over what the $0.75")
     # small pages all fit
     small = [draft.linked_source(li, "short", 2, None) for li in linked.links({PHP_A, USN})]
     assert draft.fit([CVE], vendor + small) == (vendor + small, [])
