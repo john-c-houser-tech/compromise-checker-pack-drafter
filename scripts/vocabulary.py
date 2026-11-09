@@ -14,6 +14,7 @@ imports the checker.
 import argparse
 import json
 import sys
+from pathlib import Path
 
 
 def main() -> int:
@@ -31,7 +32,14 @@ def main() -> int:
         if not cid.startswith("pack.")
     }
     sections = {name: SECTIONS[name][0] for name in SECTIONS if name not in EXPOSURE_SECTIONS}
-    print(json.dumps({"checks": checks, "sections": sections}, indent=1))
+    # C.1: each check's bands, from the checker's docs at the commit (read_bands is
+    # the drafter's own, so the drift test reads them the same way).
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from drafter.vocabulary import read_bands
+
+    doc = (Path(args.checker) / "docs" / "checks.md").read_text(encoding="utf-8")
+    bands = {cid: read_bands(doc).get(cid) for cid in checks}
+    print(json.dumps({"checks": checks, "sections": sections, "bands": bands}, indent=1))
     return 0
 
 

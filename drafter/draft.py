@@ -387,6 +387,15 @@ SCHEMA = {
         "remediation": {"type": "array", "items": {"type": "string"}},
         "references": {"type": "array", "items": {"type": "string"}},
         "unknowns": {"type": "array", "items": {"type": "string"}},
+        "weights": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {"id": {"type": "string"}, "why": {"type": "string"}},
+                "required": ["id", "why"],
+                "additionalProperties": False,
+            },
+        },
     },
     "required": [
         "title",
@@ -395,14 +404,20 @@ SCHEMA = {
         "remediation",
         "references",
         "unknowns",
+        "weights",
     ],  # fmt: skip
     "additionalProperties": False,
 }
 
 
 def _vocabulary_text() -> str:
+    def band(cid: str) -> str:
+        low, high = vocabulary.BANDS[cid]
+        return low if low == high else f"{low} to {high}"
+
     checks = "\n".join(
-        f"  {cid}: {title}" + (f" (variants: {', '.join(variants)})" if variants else "")
+        f"  {cid} [{band(cid)}]: {title}"
+        + (f" (variants: {', '.join(variants)})" if variants else "")
         for cid, (title, variants) in vocabulary.CHECKS.items()
     )
     events = "\n".join(
@@ -441,13 +456,27 @@ Rules:
   &, < and > are written &amp;, &lt; and &gt;.
 - Mitigations: the format has one kind, a php_ini setting the tool can read. If the
   threat has no such setting, give none ([]) and put workarounds in remediation.
-- Detections use only what the tool has, listed below: a built-in check by its id
-  (its findings then weigh up to likelihood_ratio 100), or the pack's own rule over
-  the event types and fields listed, or over the snapshot sections listed (at most
-  20); a snapshot rule matches an item's key only, never its fields. Weigh
-  honestly: most signs of a memory-corruption bug are weak, since a crash isn't a
-  compromise. If no sign of this threat shows in what the tool collects, give
-  fewer detections, or none ([]), and say so in the unknowns.
+- Detections use only what the tool has, listed below: a built-in check by its id,
+  or the pack's own rule over the event types and fields listed, or over the
+  snapshot sections listed; a snapshot rule matches an item's key only, never its
+  fields. If no sign of this threat shows in what the tool collects, give fewer
+  detections, or none ([]), and say so in the unknowns.
+- Weights. A likelihood_ratio says how much more likely a host is compromised than
+  not when the sign shows. The tool's bands: info 1 (doesn't count), low 1.5 (an
+  unexplained reboot), medium 4 (a direct root login, a new cron job), high 20 (a
+  web shell, a shell on a network socket), critical 100 (a second UID 0 account, a
+  hidden process). Each built-in check below shows its band in [brackets]. Naming a
+  built-in check raises its findings to your ratio while the detection counts, but
+  never more than one band above its own (low to 4, medium to 20, high to 100), and
+  never lowers them: a ratio at or above one band over its highest is refused, and
+  one at or below its lowest band adds nothing. Raise a sign when it is what this
+  threat's success looks like on a host exposed to it (a new SSH key for root after an
+  authentication bypass in the SSH server: high to critical). Leave signs that clean
+  hosts show too (crashes, error bursts, core dumps) at or near their band: most
+  signs of a memory-corruption bug are weak, since a crash isn't a compromise. The
+  pack's own rules weigh at most 20.
+- weights: one entry for each detection, its id and one sentence on why that sign,
+  on a host exposed to this threat, is that much more likely to mean compromise.
 - mitigations_yaml and detections_yaml are YAML lists, in the format below.
 - Write plainly, for a server administrator. Each remediation item is one or two
   sentences.
@@ -512,6 +541,7 @@ class Checked:
     detections: list = field(default_factory=list)
     problems: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)  # for the person signing (A.6)
+    weights: list[tuple[str, str]] = field(default_factory=list)  # (detection id, why), C.1
 
 
 def check(text: str, found: list[Source], names: set[str], cves: list[str]) -> Checked:
@@ -564,6 +594,7 @@ def _check(text: str, found: list[Source], names: set[str], cves: list[str]) -> 
             f"format: {'.'.join(map(str, e['loc']))}: {e['msg']}" for e in exc.errors()[:20]
         ]
     out.problems += _vocabulary_problems(out.detections)
+    _weights(out, answer)
     known = frozenset().union(*(s.urls for s in found))
     if isinstance(answer["references"], list):
         # The sources were sent with & < > written as entities: an address copied
@@ -668,6 +699,38 @@ def _event_fields(etype: object) -> tuple[str, ...] | None:
     return vocabulary.EVENTS.get(etype)
 
 
+def _weights(out: Checked, answer: dict) -> None:
+    """C.1: a reason for each detection's weight, and a note for one that adds
+    nothing (at or below its check's lowest band). One past the allowed raise is a
+    problem in _vocabulary_problems, as it is at assembly."""
+    given = answer.get("weights")
+    reasons: dict[str, str] = {}
+    for item in given if isinstance(given, list) else []:
+        if isinstance(item, dict) and isinstance(item.get("id"), str):
+            reasons[item["id"]] = str(item.get("why") or "").strip()
+    for d in out.detections:
+        if not isinstance(d, dict):
+            continue
+        name = str(d.get("id", "?"))
+        if not reasons.get(name):
+            out.problems.append(f"detection {name}: no reason for its weight in weights")
+        else:
+            out.weights.append((name, reasons[name]))
+        check_id, ratio = d.get("check"), d.get("likelihood_ratio")
+        if (
+            isinstance(check_id, str)
+            and check_id in vocabulary.BANDS
+            and isinstance(ratio, int | float)
+        ):
+            if ratio <= vocabulary.floor(check_id):
+                low = vocabulary.BANDS[check_id][0]
+                out.notes.append(
+                    f"detection {name} names {check_id} at {ratio:g}, at or below its lowest"
+                    f" band ({low}, {vocabulary.floor(check_id):g}): it raises none of its"
+                    " findings"
+                )
+
+
 def _vocabulary_problems(detections: list) -> list[str]:
     problems = []
     for d in detections:
@@ -681,6 +744,19 @@ def _vocabulary_problems(detections: list) -> list[str]:
                 problems.append(f"detection {name}: the tool has no check {check_id}")
             elif d.get("variant") is not None and d["variant"] not in known[1]:
                 problems.append(f"detection {name}: {check_id} has no variant {d['variant']}")
+            ratio = d.get("likelihood_ratio")
+            if (
+                known is not None
+                and check_id in vocabulary.BANDS
+                and isinstance(ratio, int | float)
+                and ratio > vocabulary.ceiling(check_id)
+            ):
+                low, high = vocabulary.BANDS[check_id]
+                bands = low if low == high else f"{low} to {high}"
+                problems.append(
+                    f"detection {name}: {check_id} is in the {bands} band; a pack may raise"
+                    f" it to at most {vocabulary.ceiling(check_id):g}, not {ratio:g} (D11)"
+                )
         events = d.get("events")
         any_of = events.get("any_of") if isinstance(events, dict) else None
         for match in any_of if isinstance(any_of, list) else []:
@@ -1000,6 +1076,19 @@ def render(d: Draft, made: str) -> str:
             " is in a source, which doesn't make it safe: sources are fetched text."
         )
         lines += [f"#   {_comment(n)}" for n in d.checked.notes]
+    if d.checked.weights:
+        lines.append("# Weights, with the AI's reasons (C.1; check each before signing):")
+        for name, why in d.checked.weights:
+            det = next((x for x in d.checked.detections if isinstance(x, dict)
+                        and str(x.get("id")) == name), {})  # fmt: skip
+            check_id = det.get("check")
+            what = (
+                f"{check_id}, band {'/'.join(dict.fromkeys(vocabulary.BANDS[check_id]))}"
+                if check_id in vocabulary.BANDS
+                else "its own rule"
+            )
+            wrapped = _wrap(f"{name} ({what}) at {det.get('likelihood_ratio', '?')}: {why}")
+            lines += [f"#   - {wrapped[0]}"] + [f"#     {line}" for line in wrapped[1:]]
     if d.checked.problems:
         lines.append("# NOT USABLE: the last answer was refused:")
         lines += [f"#   {_comment(p)}" for p in d.checked.problems]

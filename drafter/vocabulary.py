@@ -288,3 +288,130 @@ SECTIONS: dict[str, str] = {  # name: what it holds
     "containers": "Docker and Podman containers: image, privilege, capabilities, namespaces, devices, mounts",
     "mail_config": "mail server settings: relay host, trusted networks, relay restrictions, services",
 }
+
+
+# C.1: each check's bands, its lowest and highest, as the checker's docs/checks.md
+# gives them at the pinned commit (its Band column, and the bands its What column
+# names: web.worker_child is high, an interpreter medium). Two checks have no row
+# there and are written by hand from docs/scoring.md: a second UID 0 account is
+# critical; a reboot is low, or info when an operator's.
+RATIOS = {"info": 1.0, "low": 1.5, "medium": 4.0, "high": 20.0, "critical": 100.0}
+ORDER = ("info", "low", "medium", "high", "critical")
+BY_HAND = {"account.uid0": ("critical", "critical"), "system.reboot": ("info", "low")}
+
+
+def read_bands(doc: str) -> dict[str, tuple[str, str]]:
+    """(lowest, highest) band of each check in the checker's docs/checks.md."""
+    import re
+
+    rows: list[str] = []
+    for line in doc.splitlines():
+        if (
+            rows
+            and rows[-1].startswith("| `")
+            and not rows[-1].rstrip().endswith("|")
+            and (line.strip() and not line.startswith("|"))
+        ):
+            rows[-1] += " " + line  # a row written over several lines
+        else:
+            rows.append(line)
+    words = re.compile(r"\b(info|low|medium|high|critical)\b")
+    out: dict[str, tuple[str, str]] = {}
+    heads: list[str] | None = None
+    for line in rows:
+        if line.startswith("| Check |"):
+            heads = [h.strip().lower() for h in line.strip().strip("|").split("|")]
+            continue
+        m = re.match(r"\| `([a-z_]+\.[a-z_]+)` \|", line)
+        if not (m and heads and "band" in heads):
+            continue
+        cells = [c.strip() for c in re.split(r"(?<!\\)\|", line.strip().strip("|"))]
+        band = cells[heads.index("band")] if len(cells) > heads.index("band") else ""
+        found = words.findall(band.lower()) + words.findall(cells[1].lower())
+        if found:
+            out[m[1]] = (min(found, key=ORDER.index), max(found, key=ORDER.index))
+    return out | BY_HAND
+
+
+def ceiling(check: str) -> float:
+    """The most a pack may raise this check's findings to: one band over its
+    highest (docs/scoring.md), and never more than the critical band's 100."""
+    top = BANDS[check][1]
+    return RATIOS[ORDER[min(ORDER.index(top) + 1, len(ORDER) - 1)]]
+
+
+def floor(check: str) -> float:
+    """At or below this a pack's ratio raises none of the check's findings."""
+    return RATIOS[BANDS[check][0]]
+
+
+BANDS: dict[str, tuple[str, str]] = {  # id: (lowest band, highest); read_bands at the commit
+    "account.changes": ("medium", "medium"),
+    "account.log_changes": ("low", "high"),
+    "account.password": ("info", "low"),
+    "account.uid0": ("critical", "critical"),
+    "agent.stopped": ("high", "high"),
+    "clock.jump": ("low", "medium"),
+    "container.host_namespace": ("medium", "medium"),
+    "container.new": ("low", "low"),
+    "container.privileged": ("medium", "high"),
+    "files.backdated": ("low", "low"),
+    "files.deceptive": ("medium", "high"),
+    "files.dev": ("medium", "high"),
+    "files.privileged": ("high", "high"),
+    "files.scratch": ("medium", "high"),
+    "files.unowned": ("info", "high"),
+    "files.web": ("high", "high"),
+    "group.privileged": ("high", "high"),
+    "history.disabled": ("medium", "high"),
+    "kernel.core_dump": ("info", "medium"),
+    "kernel.errors": ("low", "low"),
+    "kernel.oom_kill": ("low", "medium"),
+    "kernel.segfault": ("low", "medium"),
+    "kernel.taint": ("medium", "critical"),
+    "logs.cleared": ("medium", "high"),
+    "logs.journald_config": ("high", "high"),
+    "logs.stopped": ("high", "high"),
+    "mac.disabled": ("medium", "high"),
+    "mail.domains": ("medium", "medium"),
+    "mail.relay": ("medium", "medium"),
+    "mail.volume": ("medium", "medium"),
+    "mail.web_user": ("medium", "medium"),
+    "net.config": ("medium", "medium"),
+    "net.directory": ("medium", "high"),
+    "net.firewall_comment": ("medium", "medium"),
+    "net.listener": ("low", "low"),
+    "net.managed_chain": ("medium", "medium"),
+    "net.metadata": ("low", "medium"),
+    "net.peer": ("low", "low"),
+    "net.promiscuous": ("low", "medium"),
+    "net.transfer": ("low", "low"),
+    "net.tunnel": ("medium", "medium"),
+    "package.changed": ("critical", "critical"),
+    "pam.changes": ("medium", "medium"),
+    "persistence.at_jobs": ("medium", "medium"),
+    "persistence.changes": ("low", "high"),
+    "persistence.homes": ("info", "low"),
+    "persistence.ld_preload": ("high", "critical"),
+    "process.executable": ("high", "high"),
+    "process.hidden": ("critical", "critical"),
+    "process.injected": ("low", "high"),
+    "process.miner": ("high", "high"),
+    "process.reverse_shell": ("high", "high"),
+    "software.global": ("low", "low"),
+    "software.packages": ("low", "low"),
+    "software.repository": ("low", "medium"),
+    "software.tools": ("low", "medium"),
+    "ssh.authorized_keys": ("high", "high"),
+    "ssh.guessed": ("high", "high"),
+    "ssh.login": ("medium", "medium"),
+    "ssh.login_hours": ("low", "low"),
+    "sshd.config": ("medium", "high"),
+    "sudo.rules": ("high", "high"),
+    "system.reboot": ("info", "low"),
+    "web.errors": ("low", "low"),
+    "web.exploit": ("info", "medium"),
+    "web.new_script_hit": ("high", "high"),
+    "web.noise": ("info", "info"),
+    "web.worker_child": ("medium", "high"),
+}

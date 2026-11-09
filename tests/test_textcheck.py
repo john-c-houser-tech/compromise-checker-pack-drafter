@@ -300,7 +300,8 @@ def test_a_long_unknown_wraps_under_its_own_bullet(store):
         store, [CVE], Provider(lambda body: message(body, answer)).client(), now=lambda: NOW
     )
     text = draft.render(made, "now")
-    bullets = [line for line in text.splitlines() if line.startswith("#   - ")]
+    unknowns = text.split("leave unknown", 1)[1].split("# Weights", 1)[0]
+    bullets = [line for line in unknowns.splitlines() if line.startswith("#   - ")]
     assert bullets == ["#   - " + "word " * 15 + "word", "#   - second"] or len(bullets) == 2
     assert any(line.startswith("#     word") for line in text.splitlines())
 
