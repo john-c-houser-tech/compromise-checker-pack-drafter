@@ -111,8 +111,8 @@ sent.
 
 ## Decisions for John (one at a time)
 
-- **D8. Which kinds of page are fetched automatically?** Recommended: the five
-  above, and nothing else, until a run shows a need.
+- **D8. Which kinds of page are fetched automatically? DECIDED (John, 2026-11-09):**
+  the five above, and nothing else, until a run shows a need.
 - **D9. Sources a person adds: from any https host, apart from private
   addresses?** Recommended: yes, since a person chooses each one.
 - **D10. A shared budget of 100,000 characters for the new pages in each draft?**
