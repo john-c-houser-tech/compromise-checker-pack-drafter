@@ -114,6 +114,8 @@ sent.
 - **D8. Which kinds of page are fetched automatically? DECIDED (John, 2026-11-09):**
   the five above, and nothing else, until a run shows a need.
 - **D9. Sources a person adds: from any https host, apart from private
-  addresses?** Recommended: yes, since a person chooses each one.
+  addresses? DECIDED (John, 2026-11-09): yes**, with the safeguards in section 2:
+  https only, redirects staying on https, never a private or loopback address,
+  fetched only when added, the same caps, data not instructions, marked as added.
 - **D10. A shared budget of 100,000 characters for the new pages in each draft?**
   Recommended: yes, so the $0.50 cap from D6 still holds.
