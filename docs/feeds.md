@@ -7,7 +7,9 @@ CSAF advisories, read by `drafter fill`), and for `drafter propose`
 `api.launchpad.net`, `launchpad.net`, `launchpadlibrarian.net` (Sury) and
 `rpms.remirepo.net` (Remi), and for `drafter draft` `api.github.com` (GitHub's
 security advisories, B.1). It refuses any other address, plain http,
-and any redirect that leaves the list (`drafter/http.py`).
+and any redirect that leaves the list (`drafter/http.py`). The one exception is a
+page a person adds on an approved card (B.2, D9): any public https site, by its own
+rules (`docs/web.md`), fetched once when added and kept as feed `added`.
 
 Every answer is kept in `drafter.sqlite3` with its address, time, status and
 sha256, so a draft can show what it was built from. That includes failures, "not

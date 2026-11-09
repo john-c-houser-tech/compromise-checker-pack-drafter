@@ -252,3 +252,17 @@ td { overflow-wrap: anywhere; }
   overflow-wrap: anywhere;
 }
 .words cite { display: block; font-style: normal; color: var(--quiet); font-size: 0.82rem; }
+
+/* B.2: sources added on an approved card */
+.sources { margin-top: 8px; border-top: 1px solid var(--rule); padding-top: 8px; }
+.sources summary { font-size: 0.92rem; }
+.sources .hint { color: var(--quiet); font-size: 0.85rem; margin: 6px 0; }
+.sources ul { list-style: none; padding: 0; margin: 6px 0; }
+.sources li { margin: 4px 0; overflow-wrap: anywhere; }
+.sources li.gone .url { color: var(--quiet); text-decoration: line-through; }
+.sources .url { font-family: ui-monospace, monospace; font-size: 0.85rem; }
+.sources .when { color: var(--quiet); font-size: 0.82rem; }
+.sources form.inline { display: inline; }
+.sources form.add { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 8px 0; }
+.sources form.add input[type="url"] { flex: 1 1 18rem; min-width: 0; padding: 6px 8px; border: 1px solid var(--rule); border-radius: 8px; background: var(--sheet); color: var(--ink); font: inherit; }
+.btn-small { padding: 4px 10px; font-size: 0.85rem; background: transparent; color: var(--accent); border-color: var(--accent); }

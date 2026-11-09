@@ -62,6 +62,12 @@ JSON shape (structured output). It holds:
   Assembly (`drafter pack write`) reads the same pages back from the store, by the
   fetch numbers in the draft's header, and holds the prose to them too.
 
+- **the pages a person added (B.2)** on the threat's card: each starts with its
+  address, the only one it makes citable, and is named "Added by" whom and when.
+  They take their share of the 100,000 characters first, and under the cap they are
+  left out last, the last added first. Assembly reads them back like the linked
+  pages. `drafter/added.py`, `docs/web.md`.
+
 `--dry-run` reads the store and nothing else: it fetches no page. One not read in
 the last day is listed as one the draft will fetch, and stands in at 20,000
 characters for the estimate and the cap. That is an estimate, not a bound (a page's
