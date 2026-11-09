@@ -1,6 +1,6 @@
 # Proposal: detection weights a draft can justify (2026-11-09)
 
-**Status: approved as written (John, 2026-11-09). D11 and D12 to settle, one at a time.**
+**Status: approved as written (John, 2026-11-09); D11 and D12 decided the same day. Next: C.1.**
 
 ## The problem
 
@@ -84,6 +84,6 @@ The caps (D6) are unchanged.
 - **D11. A weight past one band over the check's own: refuse, or note? DECIDED
   (John, 2026-11-09): refuse**, and send it back once with the reason (the checker
   would cut it silently); only note one at or below the band.
-- **D12. Where do the reasons go: the draft's header only, or into the pack too?**
-  Recommended: the header only. A pack carries what the checker reads, and the
+- **D12. Where do the reasons go: the draft's header only, or into the pack too?
+  DECIDED (John, 2026-11-09): the header only.** A pack carries what the checker reads, and the
   signer reads the reasons before signing.
