@@ -81,9 +81,9 @@ The caps (D6) are unchanged.
 
 ## Decisions for John (one at a time)
 
-- **D11. A weight past one band over the check's own: refuse, or note?**
-  Recommended: refuse it (the checker would cut it silently), and only note one at
-  or below the band.
+- **D11. A weight past one band over the check's own: refuse, or note? DECIDED
+  (John, 2026-11-09): refuse**, and send it back once with the reason (the checker
+  would cut it silently); only note one at or below the band.
 - **D12. Where do the reasons go: the draft's header only, or into the pack too?**
   Recommended: the header only. A pack carries what the checker reads, and the
   signer reads the reasons before signing.
