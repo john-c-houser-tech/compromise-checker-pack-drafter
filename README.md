@@ -13,10 +13,14 @@ no evidence from anyone's machines, so it can't publish anything by itself.
 ([`docs/feeds.md`](docs/feeds.md)), A.2 lists the candidates
 ([`docs/candidates.md`](docs/candidates.md)), A.3 drafts a threat's packages from
 vendor data ([`docs/fill.md`](docs/fill.md)) and proposes third-party builds for a
-person to confirm ([`docs/thirdparty.md`](docs/thirdparty.md)). Stage 2 goes as far
-as A.4 for now: a page to approve or reject each threat, whose cards say whether
-it's attacked, what it is, who can reach it and whether a signed pack covers it
-([`docs/web.md`](docs/web.md)).
+person to confirm ([`docs/thirdparty.md`](docs/thirdparty.md)). In Stage 2, A.4 is
+a page to approve or reject each threat, whose cards say whether it's attacked, what
+it is, who can reach it and whether a signed pack covers it
+([`docs/web.md`](docs/web.md)), and A.5 drafts an approved threat's title,
+detections and remediation with an AI, within set caps, and A.6 holds what it
+writes to the sources ([`docs/draft.md`](docs/draft.md)). In Stage 3, A.7 assembles
+a pack in a clone of the packs repository for signing by hand
+([`docs/assemble.md`](docs/assemble.md)).
 The plan is in
 [`plans/pack-application-plan-2026-10-31.md`](plans/pack-application-plan-2026-10-31.md).
 
@@ -29,6 +33,9 @@ The plan is in
     .venv/bin/drafter fill CVE-… --binaries GLOB… [--thirdparty proposals.toml] [--compare PACK.yaml]
     .venv/bin/drafter web [--packs ../compromise-checker-packs]   # https://packs.localhost:8443, through Caddy
     .venv/bin/drafter decisions
+    .venv/bin/drafter draft CVE-… [--dry-run] [--out FILE]   # ANTHROPIC_API_KEY set
+    .venv/bin/drafter spend
+    .venv/bin/drafter pack template|write|check …   # A.7: a pack for signing by hand
 
 ## Licence
 

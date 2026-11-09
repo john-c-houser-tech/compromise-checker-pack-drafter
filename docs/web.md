@@ -118,6 +118,43 @@ window, 30 days by default).
   section or package families changed since the page loaded is refused (409);
   the page shows the threat as it now stands, with the reason kept in its box.
 
+## Sources you add (B.2, D9)
+
+An approved threat's card has **Sources you added**: an address field, the pages
+added so far (each with **Take back**), and the addresses the pages already read
+give that nothing has read, each with **Add**. It is for pages no record links to:
+a researcher's write-up, a first sighting, a bulletin whose address isn't given.
+At most four a threat, counted across its approves: deciding again keeps them.
+The next draft sends them after the vendors' records and before the linked pages,
+and keeps them longest when the cap needs room (`docs/draft.md`). A page the drafter
+reads already (a vendor's record, or one it links to that the drafter fetches by
+itself) isn't added again; one the linked pages give, one hop further, is offered. That includes the links a page names in its link text ("NCSC-NL's
+repository"), read from its HTML: the links in its main content to other sites, not
+its menus, footers, share links or CVE records, listed before addresses written out
+in its words, 15 at most.
+
+The one-hop list needs the linked pages read. A draft reads them, but so does
+**Read the linked pages** on the card, for nothing: it fetches them by B.1's rules
+(the five kinds, the allowed hosts, at most six, each kept as a fetch, nothing sent
+to the AI), so the list fills before the first draft, and the draft then reads the
+same pages from the store if within the day.
+
+This is the only time the page reaches the network, and only when **Add** is
+pressed, for that one address (`drafter/added.py`):
+
+- https on the default port, with no login in the address;
+- every address the name resolves to must be public (never private, loopback,
+  link-local or reserved), and the connection goes to the address checked, so a
+  second lookup can't swap in another;
+- each redirect held to the same, at most five;
+- at most 4 MiB, and only HTML, plain text or JSON;
+- kept as a fetch (feed `added`), and what happened kept too: a page that
+  couldn't be read is listed with why. Nothing is deleted; taking one back is
+  recorded.
+
+The same guards as a decision apply to the form (below), and a source is added
+only to a threat's current approve.
+
 ## Safety
 
 It is for one person on one laptop (plan D7): it listens on 127.0.0.1 only and has

@@ -1,6 +1,6 @@
 # Pack application build plan — 2026-10-31
 
-> **Status: 2026-11-08.** Stage 1 (A.1–A.3) built; at the stop John chose to go on as far as A.4; A.4b (cards that say enough to decide on) approved 2026-11-08. D1–D4 and D7 settled; D5 and D6 wait for A.5 and A.8.
+> **Status: 2026-11-09.** Stage 1 (A.1–A.3) built; A.4 and A.4b (the decision page) built; A.5 (AI drafts) built and used (seven drafts, $0.57); A.6 (text checks) built; A.7 (assembly) built, the first pack (brotli) assembled and signed; A.8 (proof) built (checker #157), and brotli proved, checked against the vendors' pages and published 2026-11-08; A.9 run 2026-11-09, compared in `plans/a9-php2shell-comparison-2026-11-09.md`. D1–D7 settled.
 > Starts from the outline agreed on 2026-10-30, in Compromise Checker's
 > `plans/phase4-build-plan-2026-10-30.md`, "After Phase 4: the pack application".
 
@@ -132,19 +132,36 @@ written into `docs/web.md`.
 **A.5 Drafting.** For an approved threat only: title, mitigations, detections and
 remediation, from the fetched advisories. Answers are validated, retries bounded,
 the cost recorded per draft and held to a cap (D6). Detections may only use what
-the format allows.
+the format allows. *Go-ahead: John, 2026-11-08; built as `drafter draft`
+([`docs/draft.md`](../docs/draft.md)).*
 
 **A.6 Text checks.** Refuse references that weren't among the fetched sources.
 Flag commands, addresses and URLs in prose that no source contains. Test with
-hostile advisories planted in each feed.
+hostile advisories planted in each feed. *Go-ahead: John, 2026-11-08 ([`docs/draft.md`](../docs/draft.md), "Text
+checks"): made-up ones refused, sourced ones listed for the signer, dangerous ones
+refused wherever they came from.*
 
 ### Stage 3: release
 
 **A.7 Hand-off.** Write `PACK.yaml` on a branch of a local packs clone, show what
 changed since the last version, freeze it, and print the signing command. Then
-check the signature and run `checker packs index`.
+check the signature and run `checker packs index`. *Go-ahead: John, 2026-11-08; built as `drafter pack
+template|write|check` ([`docs/assemble.md`](../docs/assemble.md)): a person's assembly
+file holds the id, window, weight, binary filter and `packages_from` (the Java case).*
 
-**A.8 Proof.** A proof built from the pack's own entries (D5).
+*To settle before assembling (found 2026-11-08):* a threat whose fix is in another
+package. Red Hat lists the Java packages for CVE-2026-91403 as "will not fix", because
+RHEL is fixed by the ca-certificates update (CVE-2026-114406); `drafter fill` reads
+that as "no fix", so a pack assembled from fill and the Java draft would show every
+RHEL host with Java as vulnerable forever, updated or not. The ruby and edk2 threats
+have no fix yet either, but one may still come. A person decides at assembly which
+packages such a pack is judged from (here, perhaps ca-certificates), or whether it
+needs a pack of its own.
+
+**A.8 Proof.** A proof built from the pack's own entries (D5): the checker's
+`tests/integration/pack_proof.py`, beside its other Linode proofs. Without `--go` it
+prints the plan (one server per release the pack names; RHEL on Rocky, or Alma with
+`--alma`) and creates nothing.
 
 **A.9 A real one.** Regenerate PHP2Shell without looking at the signed pack and
 compare the two: what was missed, what was wrong, how long it took. Then do the
@@ -192,12 +209,17 @@ first new threat for real, through review, proof and John's signature.
   version, like Sury. The metadata keeps only the last three changelog entries per
   package, so an older fix is proposed from version numbers alone, with no
   changelog line to show.
-- **D5. Proof for each generated pack?** PHP2Shell's proof was written by hand.
-  *Recommended: a general one (install the last vulnerable and the first fixed
-  build on one image per family, and check the verdicts), about a cent a run; each
-  run still with John's OK, under a Linode cap of $10 for this plan.*
-- **D6. AI budget?** *Recommended: a per-draft cap and a total cap for the plan,
-  both set at A.5 from a measured draft, with the model chosen then.*
+- **D5. Proof for each generated pack? DECIDED (John, 2026-11-08):** PHP2Shell's
+  proof was written by hand. A general one (install the last vulnerable and the first fixed
+  build on one image per family, and check the verdicts), about a cent a server; each
+  run with John's OK, under a Linode cap of $10 for this plan, stopping to tell John
+  at $5.
+- **D6. AI budget? DECIDED (John, 2026-11-08):** Claude Opus 5.5; at most $0.50 a
+  draft and $10 for the plan, stopping to tell John at $5. **Per-draft cap raised to
+  $0.75 (John, 2026-11-09)** for B.1's linked pages: under $0.50, with room for a
+  second try, the drafter's high estimate let only about 40,000 characters of them in. Measured first on one
+  brotli draft from the same input: Opus 5.5 $0.093, Sonnet 5.5 $0.044; Opus the more
+  accurate (Sonnet gave NVD's score to CISA and cited another CVE's page).
 - **D7. Where does it run? DECIDED (John, 2026-11-07), for now:** on the laptop,
   a systemd user timer about hourly, each feed read from a saved position so a
   closed laptop only delays it; no public login page. Reconsider if the tool gets

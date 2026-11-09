@@ -31,6 +31,7 @@ ALLOWED_HOSTS = frozenset(
         "launchpad.net",  # Launchpad's file links, which redirect to its librarian
         "launchpadlibrarian.net",  # Sury's .changes files
         "rpms.remirepo.net",  # Remi's repository metadata (A.3b)
+        "api.github.com",  # GitHub's security advisories, linked from the sources (B.1)
     }
 )
 

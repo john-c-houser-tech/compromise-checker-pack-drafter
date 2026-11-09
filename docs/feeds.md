@@ -1,12 +1,15 @@
 # The feeds
 
-The drafter reads seven feeds, Red Hat's advisories and two third-party repositories, from ten hosts and no others: `www.cisa.gov`,
+The drafter reads seven feeds, Red Hat's advisories, two third-party repositories and the pages a draft's sources link to, from eleven hosts and no others: `www.cisa.gov`,
 `services.nvd.nist.gov`, `osv-vulnerabilities.storage.googleapis.com`,
 `ubuntu.com`, `access.redhat.com`, `security.access.redhat.com` (Red Hat's
 CSAF advisories, read by `drafter fill`), and for `drafter propose`
 `api.launchpad.net`, `launchpad.net`, `launchpadlibrarian.net` (Sury) and
-`rpms.remirepo.net` (Remi). It refuses any other address, plain http,
-and any redirect that leaves the list (`drafter/http.py`).
+`rpms.remirepo.net` (Remi), and for `drafter draft` `api.github.com` (GitHub's
+security advisories, B.1). It refuses any other address, plain http,
+and any redirect that leaves the list (`drafter/http.py`). The one exception is a
+page a person adds on an approved card (B.2, D9): any public https site, by its own
+rules (`docs/web.md`), fetched once when added and kept as feed `added`.
 
 Every answer is kept in `drafter.sqlite3` with its address, time, status and
 sha256, so a draft can show what it was built from. That includes failures, "not
@@ -24,7 +27,9 @@ first.
 | `redhat` | Red Hat's Security Data API: CVEs rated Critical, made public since 30 days before the last read | every page | Red Hat's top severity (D3) |
 
 Not read here: Red Hat's CSAF/VEX files and the full records of non-critical
-Ubuntu CVEs. A.3 fetches those per threat, when it needs them.
+Ubuntu CVEs. A.3 fetches those per threat, when it needs them. A draft fetches the
+advisories, bulletins, notices and alerts its sources link to (feed `linked`,
+`docs/draft.md`).
 
 ## Ubuntu's records
 

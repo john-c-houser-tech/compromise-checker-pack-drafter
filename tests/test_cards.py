@@ -323,7 +323,7 @@ def test_schema_4_moves_up_with_its_decisions_and_their_ids(tmp_path):
     db.commit()
     db.close()
     s = Store(path)
-    assert s.db.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION == 5
+    assert s.db.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION >= 5
     assert s.migrated_from == 4
     rows = s.db.execute("SELECT id, verdict, reason, signs FROM decision ORDER BY id").fetchall()
     assert [tuple(r) for r in rows] == [(1, "approve", "why", None), (2, "reject", "why", None)]

@@ -267,12 +267,12 @@ def ubuntu_entries(record: dict, cve: str, filters: list[str], draft: Draft) -> 
             draft.conflicts.append(f"{release}: Ubuntu's fixed version is unreadable; left out")
             continue
         specific = affected.get("ecosystem_specific") or {}
-        binaries = [
-            b.get("binary_name")
+        given = [
+            b
             for b in (specific.get("binaries") if isinstance(specific, dict) else None) or []
             if isinstance(b, dict)
         ]
-        names = _split(binaries, filters, release, draft)
+        names = _split([b.get("binary_name") for b in given], filters, release, draft)
         if not names:
             continue
         listed = [
@@ -280,22 +280,100 @@ def ubuntu_entries(record: dict, cve: str, filters: list[str], draft: Draft) -> 
             for v in affected.get("versions") or []
             if isinstance(v, str) and _VERSION.fullmatch(v)
         ]
-        shapes = sorted({ubuntu_shape(v) for v in [*listed, *([fixed] if fixed else [])]})
-        if not shapes:
-            shapes = [None]  # no version at all: every build, judged against the fix
-        for shape in shapes:
-            out.append(
-                Entry(
-                    release=release,
-                    binary_names=names,
-                    versions=shape,
-                    fixed=fixed,
-                    source=source,
-                    origin="ubuntu",
-                    note="" if fixed else "no fix from Ubuntu yet",
-                )
+        # The versions and the fix are the source package's; a binary can carry its
+        # own (dotnet8 8.0.132-8.0.32-… builds aspnetcore-runtime-8.0 8.0.32-…), and
+        # an installed package only ever has the binary's.
+        # With no fix, a binary's version is only its current build: nothing to map.
+        own = {
+            b.get("binary_name"): b.get("binary_version")
+            for b in given
+            if fixed is not None
+            and isinstance(b.get("binary_version"), str)
+            and b["binary_version"] != fixed
+        }
+        groups: dict[str | None, list[str]] = {}
+        for name in names:
+            groups.setdefault(own.get(name), []).append(name)
+        for binary_fixed, group in sorted(groups.items(), key=lambda g: g[0] or ""):
+            if binary_fixed is None:
+                group_fixed, group_listed = fixed, listed
+            else:
+                mapped = _binary_versions(fixed, binary_fixed, listed)
+                if mapped is None:
+                    draft.conflicts.append(
+                        f"{release} {', '.join(group)}: Ubuntu's binaries are fixed at"
+                        f" {_clean(binary_fixed, 60)}, not the source's {_clean(fixed, 60)},"
+                        " in a way the fill can't map to their earlier builds; give them by hand"
+                    )
+                    # Still named, so a host with one reads can't judge, not nothing at all
+                    # (an accepted gap mustn't make them disappear).
+                    out.append(
+                        Entry(
+                            release=release,
+                            binary_names=group,
+                            versions=UNMAPPED,
+                            fixed=binary_fixed,
+                            source=source,
+                            origin="ubuntu",
+                            note="its versions couldn't be mapped: every build reads can't judge",
+                        )
+                    )
+                    continue
+                group_fixed, group_listed = binary_fixed, mapped
+            shapes = sorted(
+                {ubuntu_shape(v) for v in [*group_listed, *([group_fixed] if group_fixed else [])]}
             )
+            if not shapes:
+                shapes = [None]  # no version at all: every build, judged against the fix
+            for shape in shapes:
+                out.append(
+                    Entry(
+                        release=release,
+                        binary_names=group,
+                        versions=shape,
+                        fixed=group_fixed,
+                        source=source,
+                        origin="ubuntu",
+                        note=(
+                            "no fix from Ubuntu yet"
+                            if not group_fixed
+                            else "the binaries' own versions, not the source's"
+                            if binary_fixed
+                            else ""
+                        ),
+                    )
+                )
     return out
+
+
+# How a binary's version can follow from its source's, each exact (dotnet8's source
+# 8.0.132-8.0.32-0ubuntu1~24.04.1 builds aspnetcore-runtime-8.0 8.0.32-0ubuntu1~24.04.1
+# and dotnet-sdk-8.0 8.0.132-0ubuntu1~24.04.1). A source version of other parts maps by
+# neither, and the fill doesn't guess.
+_RULES = (
+    lambda v: v.split("-", 1)[1] if v.count("-") >= 2 else None,  # after its first hyphen
+    lambda v: f"{v.split('-', 1)[0]}-{v.rsplit('-', 1)[1]}" if v.count("-") >= 2 else None,
+)  # first part and revision
+UNMAPPED = "~unmapped"  # a versions pattern no real version matches
+
+
+def _binary_versions(fixed: str | None, binary_fixed: str, listed: list[str]) -> list[str] | None:
+    """The binaries' versions for the source's listed ones, by the one rule (above) that
+    turns the source's fix into the binary's; None if no rule does, or one listed version
+    doesn't take it."""
+    if not fixed:
+        return None
+    for rule in _RULES:
+        if rule(fixed) != binary_fixed:
+            continue
+        out = []
+        for version in listed:
+            mapped = rule(version)
+            if mapped is None or not _VERSION.fullmatch(mapped):
+                return None  # a listed build of another shape: not mapped by the same rule
+            out.append(mapped)
+        return out
+    return None
 
 
 # Red Hat
@@ -622,7 +700,7 @@ def build(
         draft.alma_as_of = f"{alma.last_success}, {caught_up}"
     draft.not_covered = sorted(set(draft.not_covered))
     draft.guessed = sorted(set(draft.guessed))
-    order = {"ubuntu": 0, "sury": 1, "redhat": 2, "alma": 3, "remi": 4}
+    order = {"ubuntu": 0, "sury": 1, "redhat": 2, "alma": 3, "remi": 4, "byhand": 5}
     draft.entries.sort(key=lambda e: (order[e.origin], e.release, e.versions or "", e.fixed or ""))
     return draft
 
@@ -666,6 +744,7 @@ def _merge(draft: Draft) -> None:
             pair[2].add(name)
             pair[3].add(e.versions)
     for other, e, names, patterns in clashes.values():
+        patterns = {p or "(any version)" for p in patterns}  # an entry with no pattern
         if other.fixed is None or e.fixed is None:
             advice = "keep fixed: null, since one CVE has no fix yet"
         elif other.fixed != e.fixed:
@@ -708,6 +787,7 @@ def render_yaml(draft: Draft) -> str:
         "alma": "AlmaLinux's own builds (debranded or early), matched only by AlmaLinux's",
         "sury": "Sury's PPA, confirmed by a person (A.3b)",
         "remi": "Remi's repository, confirmed by a person (A.3b)",
+        "byhand": "Written by a person in the assembly file (A.7)",
     }
     last = None
     for e in draft.entries:

@@ -30,8 +30,9 @@ CSAF_BASE = "https://security.access.redhat.com/data/csaf/v2/advisories/2026/"
 ALMA_URL = "https://osv-vulnerabilities.storage.googleapis.com/AlmaLinux/ALSA-2026%3AA014.json"
 
 
-def _bins(*names, version="x"):
-    return [{"binary_name": n, "binary_version": version} for n in names]
+def _bins(*names, version=None):
+    """Binaries as Ubuntu's record lists them; version None: the record's own fix."""
+    return [{"binary_name": n, **({"binary_version": version} if version else {})} for n in names]
 
 
 def _ubuntu_affected(ecosystem, name, fixed, binaries, versions=()):
@@ -834,3 +835,86 @@ def test_alma_freshness_says_whether_it_caught_up(ctx, fetcher, store):
         FeedState(feed="osv-almalinux", last_success="2026-11-07T12:00:00Z", etag='"e"')
     )
     assert "caught up" in fill.render_report(fill.build(ctx, [CVE], []))
+
+
+DOTNET = "dotnet8"
+SRC_FIX = "8.0.132-8.0.32-0ubuntu1~24.04.1"
+BIN_FIX = "8.0.32-0ubuntu1~24.04.1"
+
+
+def _dotnet(binaries, versions):
+    record = {"id": "UBUNTU-" + CVE, "related": ["USN-8942-1"], "affected": [{
+        "package": {"ecosystem": "Ubuntu:24.04:LTS", "name": DOTNET},
+        "versions": versions,
+        "ranges": [{"type": "ECOSYSTEM", "events": [{"introduced": "0"}, {"fixed": SRC_FIX}]}],
+        "ecosystem_specific": {"binaries": binaries},
+    }]}  # fmt: skip
+    draft = fill.Draft(cves=[CVE], binary_filter=[])
+    return fill.ubuntu_entries(record, CVE, [], draft), draft
+
+
+def test_binaries_with_their_own_versions_are_judged_by_them():
+    # dotnet8 8.0.132-8.0.32-… builds aspnetcore-runtime-8.0 8.0.32-…: the installed
+    # package only ever carries the binary's (the .NET pack, 2026-11-09).
+    entries, draft = _dotnet(
+        _bins("aspnetcore-runtime-8.0", version=BIN_FIX),
+        ["8.0.130-8.0.30-0ubuntu1~24.04.1", "8.0.131-8.0.31-0ubuntu1~24.04.1"],
+    )
+    assert sorted(e.versions for e in entries) == [
+        "8.0.30-0ubuntu*",
+        "8.0.31-0ubuntu*",
+        "8.0.32-0ubuntu*",
+    ]
+    assert {e.fixed for e in entries} == {BIN_FIX} and not draft.conflicts
+    from drafter.checkerformat.versions import compare
+
+    # The source's fix sorts above every runtime build: never the one to judge them by.
+    assert compare("dpkg", BIN_FIX, SRC_FIX) < 0
+
+
+def test_the_sdk_and_the_runtime_each_get_their_own_versions():
+    # As Ubuntu's real dotnet8 record has them: the runtime drops the SDK number, the
+    # SDK drops the runtime's, and the meta package carries the source's own.
+    sdk_fix = "8.0.132-0ubuntu1~24.04.1"
+    entries, draft = _dotnet(
+        _bins("aspnetcore-runtime-8.0", version=BIN_FIX)
+        + _bins("dotnet-sdk-8.0", version=sdk_fix)
+        + _bins("dotnet8", version=SRC_FIX),
+        ["8.0.131-8.0.31-0ubuntu1~24.04.1"],
+    )
+    by = {}
+    for e in entries:
+        by.setdefault(e.binary_names[0], set()).add((e.versions, e.fixed))
+    runtime = {("8.0.31-0ubuntu*", BIN_FIX), ("8.0.32-0ubuntu*", BIN_FIX)}
+    assert by["aspnetcore-runtime-8.0"] == runtime
+    assert by["dotnet-sdk-8.0"] == {("8.0.131-0ubuntu*", sdk_fix), ("8.0.132-0ubuntu*", sdk_fix)}
+    assert {f for _, f in by["dotnet8"]} == {SRC_FIX}  # the source's own: as before
+    assert not draft.conflicts
+
+
+def test_a_binary_version_the_fill_cant_map_is_for_a_person():
+    # bpftool's shape on a kernel record (7.7.0+7.0.0-42.42) is one: no rule maps it.
+    entries, draft = _dotnet(
+        _bins("odd-binary", version="2:9.9-1ubuntu1"), ["8.0.131-8.0.31-0ubuntu1"]
+    )
+    assert any("odd-binary" in c and "give them by hand" in c for c in draft.conflicts)
+    # still named, with a pattern no build matches: a host with it reads can't judge
+    import fnmatch
+
+    (only,) = entries
+    assert only.versions == fill.UNMAPPED and only.binary_names == ["odd-binary"]
+    assert not fnmatch.fnmatchcase("2:9.9-1ubuntu1", only.versions)
+
+
+def test_with_no_fix_a_binarys_version_is_only_its_current_build():
+    record = {"id": "UBUNTU-" + CVE, "related": [], "affected": [{
+        "package": {"ecosystem": "Ubuntu:22.04:LTS", "name": "dotnet7"},
+        "versions": ["7.0.118-0ubuntu1~22.04.1"],
+        "ranges": [{"type": "ECOSYSTEM", "events": [{"introduced": "0"}]}],
+        "ecosystem_specific": {
+            "binaries": _bins("aspnetcore-runtime-7.0", version="7.0.119-0ubuntu1~22.04.1")
+        },
+    }]}  # fmt: skip
+    draft = fill.Draft(cves=[CVE], binary_filter=[])
+    entries = fill.ubuntu_entries(record, CVE, [], draft)
+    assert entries and all(e.fixed is None for e in entries) and not draft.conflicts

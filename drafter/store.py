@@ -17,7 +17,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 8
 
 _SCHEMA = """
 CREATE TABLE fetches (
@@ -200,6 +200,82 @@ CREATE TRIGGER decision_kept BEFORE UPDATE ON decision
 BEGIN SELECT RAISE(ABORT, 'decisions are append-only'); END;
 CREATE TRIGGER decision_not_removed BEFORE DELETE ON decision
 BEGIN SELECT RAISE(ABORT, 'decisions are append-only'); END;
+""",
+    6: """
+-- A.5: every request sent to the AI, with what it cost (D6's caps are summed from
+-- here). A row goes in before the request is sent, at the most it could cost, and
+-- is settled with the real figures when the answer comes; one never settled (the
+-- run killed mid-request) keeps its worst case, so spending is never undercounted.
+-- Never removed (decisions' triggers forbid only that here: settling is an update).
+CREATE TABLE ai_request (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sent_at TEXT NOT NULL,
+    cves TEXT NOT NULL,           -- JSON list: the approved threat drafted
+    decision_id INTEGER NOT NULL REFERENCES decision(id),
+    model TEXT NOT NULL,
+    attempt INTEGER NOT NULL,     -- 1, or 2 when the first answer was refused
+    settled INTEGER NOT NULL DEFAULT 0,
+    request_id TEXT,
+    stop_reason TEXT,             -- the model's, or what went wrong
+    input_tokens INTEGER,
+    output_tokens INTEGER,
+    cache_write_tokens INTEGER,
+    cache_read_tokens INTEGER,
+    cost REAL NOT NULL,           -- dollars: the worst case until settled
+    answer TEXT,                  -- the answer as it came, untrusted
+    problems TEXT                 -- JSON list: why it was refused, if it was
+);
+CREATE TRIGGER ai_request_kept BEFORE DELETE ON ai_request
+BEGIN SELECT RAISE(ABORT, 'the record of AI spending is kept'); END;
+""",
+    7: """
+-- A.7: each pack written into a packs clone for signing, with the SHA-256 it was
+-- frozen at, so `drafter pack check` can refuse a file changed before or after
+-- signing. Append-only, like the decisions.
+CREATE TABLE pack_assembly (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    assembled_at TEXT NOT NULL,
+    pack_id TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    path TEXT NOT NULL,
+    sha256 TEXT NOT NULL,
+    cves TEXT NOT NULL,           -- JSON list
+    decision_id INTEGER NOT NULL REFERENCES decision(id),
+    draft_sha256 TEXT NOT NULL,   -- the reviewed draft it was assembled from
+    reviewed_by TEXT NOT NULL,
+    assembly TEXT NOT NULL        -- the assembly file, as it was
+);
+CREATE TRIGGER pack_assembly_kept BEFORE UPDATE ON pack_assembly
+BEGIN SELECT RAISE(ABORT, 'assemblies are append-only'); END;
+CREATE TRIGGER pack_assembly_not_removed BEFORE DELETE ON pack_assembly
+BEGIN SELECT RAISE(ABORT, 'assemblies are append-only'); END;
+""",
+    8: """
+-- B.2: pages a person added to an approved threat's sources (D9), each fetched when
+-- added and kept as a fetch (feed `added`). A failed one is kept too, with why.
+-- Never deleted; taking one back only sets removed_at.
+CREATE TABLE added_source (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    decision_id INTEGER NOT NULL REFERENCES decision(id),
+    url TEXT NOT NULL,
+    added_by TEXT NOT NULL,
+    added_at TEXT NOT NULL,
+    fetch_id INTEGER REFERENCES fetches(id),
+    outcome TEXT NOT NULL,        -- 'kept', or why it wasn't
+    removed_at TEXT
+);
+CREATE TRIGGER added_source_kept BEFORE DELETE ON added_source
+BEGIN SELECT RAISE(ABORT, 'added sources are kept'); END;
+-- INSERT OR REPLACE would delete a row without its delete trigger firing.
+CREATE TRIGGER added_source_not_replaced BEFORE INSERT ON added_source
+WHEN NEW.id IS NOT NULL AND EXISTS (SELECT 1 FROM added_source WHERE id = NEW.id)
+BEGIN SELECT RAISE(ABORT, 'added sources are kept'); END;
+CREATE TRIGGER added_source_only_removed BEFORE UPDATE ON added_source
+WHEN NEW.id IS NOT OLD.id OR NEW.decision_id IS NOT OLD.decision_id
+  OR NEW.url IS NOT OLD.url OR NEW.added_by IS NOT OLD.added_by
+  OR NEW.added_at IS NOT OLD.added_at OR NEW.fetch_id IS NOT OLD.fetch_id
+  OR NEW.outcome IS NOT OLD.outcome OR OLD.removed_at IS NOT NULL
+BEGIN SELECT RAISE(ABORT, 'an added source is only ever taken back, once'); END;
 """,
 }
 
