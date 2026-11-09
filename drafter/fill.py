@@ -305,6 +305,19 @@ def ubuntu_entries(record: dict, cve: str, filters: list[str], draft: Draft) -> 
                         f" {_clean(binary_fixed, 60)}, not the source's {_clean(fixed, 60)},"
                         " in a way the fill can't map to their earlier builds; give them by hand"
                     )
+                    # Still named, so a host with one reads can't judge, not nothing at all
+                    # (an accepted gap mustn't make them disappear).
+                    out.append(
+                        Entry(
+                            release=release,
+                            binary_names=group,
+                            versions=UNMAPPED,
+                            fixed=binary_fixed,
+                            source=source,
+                            origin="ubuntu",
+                            note="its versions couldn't be mapped: every build reads can't judge",
+                        )
+                    )
                     continue
                 group_fixed, group_listed = binary_fixed, mapped
             shapes = sorted(
@@ -333,22 +346,34 @@ def ubuntu_entries(record: dict, cve: str, filters: list[str], draft: Draft) -> 
     return out
 
 
+# How a binary's version can follow from its source's, each exact (dotnet8's source
+# 8.0.132-8.0.32-0ubuntu1~24.04.1 builds aspnetcore-runtime-8.0 8.0.32-0ubuntu1~24.04.1
+# and dotnet-sdk-8.0 8.0.132-0ubuntu1~24.04.1). A source version of other parts maps by
+# neither, and the fill doesn't guess.
+_RULES = (
+    lambda v: v.split("-", 1)[1] if v.count("-") >= 2 else None,  # after its first hyphen
+    lambda v: f"{v.split('-', 1)[0]}-{v.rsplit('-', 1)[1]}" if v.count("-") >= 2 else None,
+)  # first part and revision
+UNMAPPED = "~unmapped"  # a versions pattern no real version matches
+
+
 def _binary_versions(fixed: str | None, binary_fixed: str, listed: list[str]) -> list[str] | None:
-    """The binaries' versions for the source's listed ones, when the binary's fix is the
-    source's after its first hyphen (dotnet8 8.0.132-8.0.32-0ubuntu1 builds 8.0.32-0ubuntu1):
-    each listed version mapped the same way. None for any other relation: the fill
-    doesn't guess."""
-    if not fixed or "-" not in fixed or fixed.split("-", 1)[1] != binary_fixed:
+    """The binaries' versions for the source's listed ones, by the one rule (above) that
+    turns the source's fix into the binary's; None if no rule does, or one listed version
+    doesn't take it."""
+    if not fixed:
         return None
-    out = []
-    for version in listed:
-        if version.count("-") < 2:
-            return None  # a listed build of another shape: not mapped by the same rule
-        mapped = version.split("-", 1)[1]
-        if not _VERSION.fullmatch(mapped):
-            return None
-        out.append(mapped)
-    return out
+    for rule in _RULES:
+        if rule(fixed) != binary_fixed:
+            continue
+        out = []
+        for version in listed:
+            mapped = rule(version)
+            if mapped is None or not _VERSION.fullmatch(mapped):
+                return None  # a listed build of another shape: not mapped by the same rule
+            out.append(mapped)
+        return out
+    return None
 
 
 # Red Hat
