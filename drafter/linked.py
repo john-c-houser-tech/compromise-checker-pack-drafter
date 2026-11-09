@@ -203,6 +203,84 @@ class _Text(html.parser.HTMLParser):
             self.main.append(text)
 
 
+class _Links(html.parser.HTMLParser):
+    """A page's links (<a href>), in <main> when it has one, never in its menus,
+    headers, footers or forms. At most MAX_LINKS kept, so a page of links costs
+    little."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.all: list[str] = []
+        self.main: list[str] = []
+        self._in_main = 0
+        self._skip = 0
+        self._stack: list[str] = []
+        self._open: dict[str, int] = {}
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        if tag == "a" and not self._skip:
+            href = dict(attrs).get("href")
+            if href and len(self.all) < 4 * MAX_LINKS:
+                self.all.append(href)
+            if href and self._in_main and len(self.main) < 4 * MAX_LINKS:
+                self.main.append(href)
+        if tag in _VOID:
+            return
+        self._stack.append(tag)
+        self._open[tag] = self._open.get(tag, 0) + 1
+        self._skip += tag in _SKIP
+        self._in_main += tag == "main"
+
+    def handle_endtag(self, tag: str) -> None:
+        if not self._open.get(tag):
+            return
+        while self._stack:
+            open_tag = self._stack.pop()
+            self._open[open_tag] -= 1
+            self._skip -= open_tag in _SKIP
+            self._in_main -= open_tag == "main"
+            if open_tag == tag:
+                break
+
+
+MAX_LINKS = 50
+# Records the drafter holds already (the vendors' references point at them).
+_RECORD_SITES = ("cve.org", "nvd.nist.gov")
+
+
+def _site(host: str) -> str:
+    return host.lower().removeprefix("www.")
+
+
+def html_links(body: bytes, base: str) -> list[str]:
+    """The addresses a page links to on other sites, from its main content: for the
+    card's one hop further (B.2), never sent to the AI. A page names most of its links
+    ("NCSC-NL's repository"), so its words alone don't give them. Not its own site's
+    (subdomains included), not a "share this" link, not a CVE record."""
+    parser = _Links()
+    parser.feed(body.decode("utf-8", "replace"))
+    parser.close()
+    own = _site(urllib.parse.urlsplit(base).hostname or "")
+    out: dict[str, None] = {}
+    for href in parser.main or parser.all:
+        try:
+            url = urllib.parse.urljoin(base, href.strip())
+            parts = urllib.parse.urlsplit(url)
+            host = _site(parts.hostname or "")
+        except ValueError:
+            continue
+        if parts.scheme != "https" or not host or host == own or host.endswith("." + own):
+            continue
+        if any(host == r or host.endswith("." + r) for r in _RECORD_SITES):
+            continue
+        if "http" in parts.query.lower() or own in parts.query.lower():
+            continue  # a share or feedback link, carrying the page's own address
+        out.setdefault(urllib.parse.urlunsplit(parts._replace(fragment="")), None)
+        if len(out) >= MAX_LINKS:
+            break
+    return list(out)
+
+
 def html_text(body: bytes) -> str:
     parser = _Text()
     parser.feed(body.decode("utf-8", "replace"))

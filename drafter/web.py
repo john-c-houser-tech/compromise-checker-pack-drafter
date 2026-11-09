@@ -268,6 +268,10 @@ def _sources(store: Store, decision: decisions.Decision, now: dt.datetime) -> di
 
     records = added.listed(store, decision.id)
     texts = [text for _, text, _ in added.pages(store, decision.id)]
+    page_links: list[str] = []
+    for a in records:
+        if a.kept:
+            page_links += _page_links(store, a.fetch_id, a.url)
     reads = _read_already(store, decision)
     links = linked.links(reads)
     ctx = Context(store=store, fetcher=None, now=lambda: now)
@@ -285,6 +289,8 @@ def _sources(store: Store, decision: decisions.Decision, now: dt.datetime) -> di
                 text = None
             if text:
                 texts.append(text)
+            if link.kind.read == "html":
+                page_links += _page_links(store, row["id"], link.url)
     # Offered unless read already: by hand, or as a linked page the drafter fetches.
     have = {a.url for a in records} | {li.url for li in linked.links(reads)}
     kept = [a for a in records if a.kept]
@@ -293,10 +299,25 @@ def _sources(store: Store, decision: decisions.Decision, now: dt.datetime) -> di
         "added": records,
         "most": added.MAX_ADDED,
         "room": added.MAX_ADDED - len(kept),
-        "further": added.further(texts, have),
+        "further": added.further(texts, have, urls=page_links),
         "linked": min(len(links), linked.MAX_PAGES),  # a draft reads six at most
         "linked_read": read,  # in the last day, as a draft would reuse them
     }
+
+
+def _page_links(store: Store, fetch_id: int, url: str) -> list[str]:
+    """The addresses a kept HTML page links to (a JSON or text page has none)."""
+
+    def read(body: bytes) -> str:
+        if b"<" not in body[:4096]:
+            return ""
+        return "\n".join(linked.html_links(body, url))  # an address holds no line break
+
+    try:
+        text = added.kept_text(store, fetch_id, read, kind="links")
+    except (ValueError, RecursionError, UnicodeDecodeError, AttributeError, TypeError):
+        return []
+    return [line for line in (text or "").split("\n") if line]
 
 
 def _read_already(store: Store, decision: decisions.Decision) -> set[str]:
