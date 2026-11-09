@@ -87,3 +87,50 @@ The caps (D6) are unchanged.
 - **D12. Where do the reasons go: the draft's header only, or into the pack too?
   DECIDED (John, 2026-11-09): the header only.** A pack carries what the checker reads, and the
   signer reads the reasons before signing.
+
+## C.2: two drafts with the bands (2026-11-09)
+
+The drafts are `drafts/php2shell-c2.draft.yaml` ($0.40 in two requests) and
+`drafts/ruby-gitlab-c2.draft.yaml` ($0.11 in one). That makes $1.45 of $10 spent.
+
+**PHP2Shell**, against B.3 (before C.1) and the signed pack:
+
+| Detection | Band | B.3 | C.2 | Signed |
+|---|---|---|---|---|
+| worker-child (web.worker_child) | medium to high | 20 (no effect) | **50** | 100 |
+| reverse-shell (process.reverse_shell) | high | 20 (no effect) | **50** | — |
+| web-shell (files.web) | low to high | 8 (no effect) | 20 | — |
+| new-script-hit (web.new_script_hit) | high | — | 20, kept at its band "to tie it to the window" | 50 |
+| segfault (kernel.segfault) | low to medium | 2 | 2 | (own rule, 8) |
+| error burst (web.errors) | low | 2 | 1.5, kept at its band | 4 |
+| timeouts (own rule) | — | 2 | 2 | — |
+
+**Ruby and GitLab** (no signed pack, so nothing to copy):
+- worker-shell is raised to 40, "held below critical because GitLab legitimately runs child processes";
+- reverse-shell is raised to 50;
+- process.executable is held at 20;
+- segfault and core dump stay at their bands (4).
+
+**What C.1 changed:**
+- The weights now do something. They raise the signs that mean the threat worked,
+  past their band, and hold the noisy ones at or below theirs. B.3 raised almost
+  nothing.
+- Every weight comes with a reason, and the reasons are specific to the threat and
+  the source: CISA names PHP workers starting shells as the sign to watch.
+- The notes caught what a signer needs to know: worker-child's interpreter findings
+  only reach 20, and new-script-hit and web.errors at their bands add nothing.
+
+**Still different from the signed pack:**
+- The draft raises less: worker-child 50 against 100, and new-script-hit left at
+  20 against 50.
+- It still has no exploit-specific crash rule (the signed pack's php-crash, at least
+  6 in 10 minutes, at 8).
+
+These are judgment calls the signer makes, and the reasons now show where they
+differ.
+
+**Seen twice, worth fixing:** the first PHP2Shell answer again gave php.ini
+mitigations without PHP's default setting (`memory_limit`, `fatal_error_backtraces`),
+which the format refuses. The retry costs about $0.15 each time. Fix it in the
+instructions: a php_ini mitigation must give PHP's own default, and one the sources
+don't give goes in remediation.
