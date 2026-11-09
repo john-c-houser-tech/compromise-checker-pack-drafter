@@ -261,13 +261,11 @@ def view(site: Site, store: Store) -> dict:
 def _sources(store: Store, decision: decisions.Decision) -> dict:
     """B.2, for an approved threat's card: the pages a person added, and the
     addresses the pages already read give that nothing has read (one click adds one)."""
-    from drafter import draft
 
     records = added.listed(store, decision.id)
-    vendor = draft.sources(store, list(decision.cves))
-    urls = frozenset().union(*(s.urls for s in vendor)) if vendor else frozenset()
     texts = [text for _, text, _ in added.pages(store, decision.id)]
-    for link in linked.links(urls):
+    reads = _read_already(store, decision)
+    for link in linked.links(reads):
         row = store.db.execute(
             "SELECT id FROM fetches WHERE feed = ? AND url = ? AND status = 200"
             " ORDER BY id DESC LIMIT 1",
@@ -275,17 +273,29 @@ def _sources(store: Store, decision: decisions.Decision) -> dict:
         ).fetchone()
         if row is not None:
             try:
-                texts.append(linked.READ[link.kind.read](store.fetch_body(row["id"]) or b""))
+                text = added.kept_text(store, row["id"], linked.READ[link.kind.read])
             except (ValueError, RecursionError, UnicodeDecodeError, AttributeError, TypeError):
-                pass
-    have = {a.url for a in records} | set(urls)
+                text = None
+            if text:
+                texts.append(text)
+    have = {a.url for a in records} | reads | {li.url for li in linked.links(reads)}
     kept = [a for a in records if a.kept]
     return {
         "decision": decision.id,
         "added": records,
+        "most": added.MAX_ADDED,
         "room": added.MAX_ADDED - len(kept),
         "further": added.further(texts, have),
     }
+
+
+def _read_already(store: Store, decision: decisions.Decision) -> set[str]:
+    """The addresses the drafter reads for this threat by itself: the vendors'
+    records' own, whose linked pages it fetches (B.1)."""
+    from drafter import draft
+
+    vendor = draft.sources(store, list(decision.cves))
+    return set().union(*(s.urls for s in vendor)) if vendor else set()
 
 
 def _signed(site: Site) -> tuple[list[packs.Pack], str | None]:
@@ -591,8 +601,10 @@ def _source_post(handler: Handler, fields: dict[str, str]) -> None:
         else:
             try:
                 if fields["action"] == "add":
+                    reads = _read_already(store, decision)
+                    skip = reads | {li.url for li in linked.links(reads)}
                     done = added.add(store, decision_id, fields.get("url", ""), site.by, site.now,
-                                     fetch=site.fetch_added)  # fmt: skip
+                                     fetch=site.fetch_added, skip=skip)  # fmt: skip
                     if not done.kept:
                         error = f"Not added: {done.url} couldn't be read ({done.outcome})."
                 elif fields["action"] == "remove":
@@ -621,7 +633,7 @@ def _source_post(handler: Handler, fields: dict[str, str]) -> None:
         store.close()
 
 
-_ANCHOR = re.compile(r"t-cve-\d{4}-\d{4,9}")
+_ANCHOR = re.compile(r"t-cve-[0-9]{4}-[0-9]{4,9}")
 
 
 def _quoted(reason: str) -> str:

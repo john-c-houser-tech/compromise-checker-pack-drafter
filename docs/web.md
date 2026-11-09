@@ -124,8 +124,11 @@ An approved threat's card has **Sources you added**: an address field, the pages
 added so far (each with **Take back**), and the addresses the pages already read
 give that nothing has read, each with **Add**. It is for pages no record links to:
 a researcher's write-up, a first sighting, a bulletin whose address isn't given.
-At most four a threat. The next draft sends them after the vendors' records and
-the linked pages, and keeps them longest when the cap needs room (`docs/draft.md`).
+At most four a threat, counted across its approves: deciding again keeps them.
+The next draft sends them after the vendors' records and before the linked pages,
+and keeps them longest when the cap needs room (`docs/draft.md`). A page the drafter
+reads already (a vendor's record, or one it links to that the drafter fetches by
+itself) isn't added again; one the linked pages give, one hop further, is offered.
 
 This is the only time the page reaches the network, and only when **Add** is
 pressed, for that one address (`drafter/added.py`):

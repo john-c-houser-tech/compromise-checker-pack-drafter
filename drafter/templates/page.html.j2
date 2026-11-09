@@ -104,8 +104,8 @@
       {% endif %}
       {% if c.sources %}
       {% set src = c.sources %}
-      <details class="sources"{% if src.added or kept.anchor == c.anchor %} open{% endif %}><summary>Sources you added ({{ src.added|selectattr("kept")|list|length }} of 4)</summary>
-        <p class="hint">For pages no record links to: a researcher's write-up, a first sighting, a bulletin. Fetched once, now; any https site but private addresses. In the next draft, after the vendors' records and the linked pages.</p>
+      <details class="sources"{% if src.added or kept.anchor == c.anchor %} open{% endif %}><summary>Sources you added ({{ src.added|selectattr("kept")|list|length }} of {{ src.most }})</summary>
+        <p class="hint">For pages no record links to: a researcher's write-up, a first sighting, a bulletin. Fetched once, now; any https site but private addresses. In the next draft, after the vendors' records and before the linked pages; kept longest when the cap needs room.</p>
         {% if src.added %}
         <ul class="added">
         {% for a in src.added %}
@@ -113,7 +113,7 @@
           {% if a.kept %}
             <form class="inline" method="post" action="/source">
               <input type="hidden" name="token" value="{{ token }}"><input type="hidden" name="decision" value="{{ src.decision }}"><input type="hidden" name="anchor" value="{{ c.anchor }}"><input type="hidden" name="added" value="{{ a.id }}">
-              <button type="submit" name="action" value="remove" class="btn btn-small">Take back</button>
+              <button type="submit" name="action" value="remove" class="btn btn-small" aria-label="Take back {{ a.url }}">Take back</button>
             </form>
           {% endif %}
           </li>
@@ -133,13 +133,13 @@
         {% for u in src.further %}
           <li><form class="inline" method="post" action="/source">
             <input type="hidden" name="token" value="{{ token }}"><input type="hidden" name="decision" value="{{ src.decision }}"><input type="hidden" name="anchor" value="{{ c.anchor }}"><input type="hidden" name="url" value="{{ u }}">
-            <button type="submit" name="action" value="add" class="btn btn-small">Add</button>
+            <button type="submit" name="action" value="add" class="btn btn-small" aria-label="Add {{ u }}">Add</button>
           </form> <span class="url">{{ u }}</span></li>
         {% endfor %}
         </ul>
         {% endif %}
         {% else %}
-        <p class="hint">Four added already: take one back to add another.</p>
+        <p class="hint">{{ src.most }} added already: take one back to add another.</p>
         {% endif %}
       </details>
       {% endif %}

@@ -266,6 +266,10 @@ CREATE TABLE added_source (
 );
 CREATE TRIGGER added_source_kept BEFORE DELETE ON added_source
 BEGIN SELECT RAISE(ABORT, 'added sources are kept'); END;
+-- INSERT OR REPLACE would delete a row without its delete trigger firing.
+CREATE TRIGGER added_source_not_replaced BEFORE INSERT ON added_source
+WHEN NEW.id IS NOT NULL AND EXISTS (SELECT 1 FROM added_source WHERE id = NEW.id)
+BEGIN SELECT RAISE(ABORT, 'added sources are kept'); END;
 CREATE TRIGGER added_source_only_removed BEFORE UPDATE ON added_source
 WHEN NEW.id IS NOT OLD.id OR NEW.decision_id IS NOT OLD.decision_id
   OR NEW.url IS NOT OLD.url OR NEW.added_by IS NOT OLD.added_by

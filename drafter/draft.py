@@ -273,11 +273,16 @@ def drafted_linked(store: Store, draft_text: str) -> list[Source]:
         row = store.db.execute(
             "SELECT feed, url, sha256 FROM fetches WHERE id = ?", (int(m["id"]),)
         ).fetchone()
+        record = store.db.execute(
+            "SELECT 1 FROM added_source WHERE fetch_id = ? AND url = ? AND outcome = 'kept'",
+            (int(m["id"]), m["url"]),
+        ).fetchone()
         if (
-            row is None
+            record is None
+            or row is None
             or row["feed"] != added_mod.FEED
             or row["url"] != m["url"]
-            or (row["sha256"] != m["sha"])
+            or row["sha256"] != m["sha"]
         ):
             raise DraftError(f"the draft's added page {m['url']} isn't kept as fetch {m['id']}")
         record = added_mod.Added(0, m["url"], m["by"], m["day"], int(m["id"]), "kept", None)
@@ -287,7 +292,7 @@ def drafted_linked(store: Store, draft_text: str) -> list[Source]:
 
 
 _ADDED_LINE = re.compile(
-    r"^# +Added by (?P<by>[^\s:]{1,64}) (?P<day>\d{4}-\d{2}-\d{2}): (?P<url>https://\S+?): fetch"
+    r"^# +Added by (?P<by>.{1,64}?) (?P<day>\d{4}-\d{2}-\d{2}): (?P<url>https://\S+?): fetch"
     r" (?P<id>\d{1,12}), sha256 (?P<sha>[0-9a-f]{64}), ",
     re.M,
 )
@@ -459,9 +464,15 @@ def _data(text: str) -> str:
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
+def _name(text: str) -> str:
+    """A source's name inside its tag: escaped like its text, quotes too, since it can
+    hold an address a person typed (B.2)."""
+    return _data(text).replace('"', "&quot;")
+
+
 def user_message(cves: list[str], found: list[Source]) -> str:
     blocks = "\n\n".join(
-        f'<source name="{s.name}">\n{_data(_cut(s.text))}\n</source>' for s in found
+        f'<source name="{_name(s.name)}">\n{_data(_cut(s.text))}\n</source>' for s in found
     )
     return f"Draft the pack parts for {', '.join(cves)}. The sources, as fetched:\n\n{blocks}"
 
@@ -981,7 +992,7 @@ def render(d: Draft, made: str) -> str:
             _comment(f"#   {s.name}: fetch {s.fetch_id}, sha256 {s.sha256 or '?'}, {s.url}")
         )
     if d.left_out:
-        lines.append("# Linked pages not sent (B.1):")
+        lines.append("# Linked or added pages not sent:")
         lines += [f"#   {_comment(x)}" for x in d.left_out]
     if d.checked.notes:
         lines.append(

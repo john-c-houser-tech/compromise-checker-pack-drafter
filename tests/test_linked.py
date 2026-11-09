@@ -228,7 +228,7 @@ def test_the_linked_pages_are_sent_cited_and_listed(approved_store, fetcher):
     assert made.ok, made.checked.problems  # the setting and the page are in a source now
     text = draft.render(made, "2026-11-09 10:00 UTC")
     assert f"Linked page, a project's advisory: {PHP_A}: fetch" in text
-    assert f"# Linked pages not sent (B.1):\n#   {RHSB} (a Red Hat bulletin): HTTP 404" in text
+    assert f"# Linked or added pages not sent:\n#   {RHSB} (a Red Hat bulletin): HTTP 404" in text
 
 
 def test_without_the_page_the_setting_is_still_refused(approved_store):
