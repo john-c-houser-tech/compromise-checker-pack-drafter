@@ -36,6 +36,21 @@ JSON shape (structured output). It holds:
   title, details, statement, mitigation, references), never their package lists.
   A source longer than 20,000 characters is cut, and says so where it is cut, and
   its `<`, `>` and `&` are escaped, so it can't close its block or pose as another.
+- **the pages they link to (B.1)**, of five kinds only (D8), in this order: a
+  project's GitHub security advisory and a reviewed GitHub advisory (through GitHub's
+  API, as JSON), a Red Hat security bulletin, an Ubuntu security notice (Ubuntu's
+  JSON, without its package list) and a CISA alert (the page's own words, not its
+  menus or scripts). At most six, sharing 100,000 characters (D10); one past either,
+  or one that can't be fetched or read, is left out and named in the dry run and the
+  draft's header. Each starts with its address, which may be cited. A page read in the
+  last day is read again from the store (feed `linked`), so a draft reads what its dry
+  run did. Its words count for every check, except that a package a linked notice
+  names doesn't become one the answer may name: only the vendors' own records allow
+  that. `drafter/linked.py`.
+
+`--dry-run` reads the store and nothing else: it fetches no page. One not read in
+the last day is listed as one the draft will fetch, and counted at its most, 20,000
+characters, so the cost it shows is still the most a request could cost.
 
 The sources are fetched text, untrusted. The instructions say so, the model has no
 tools to act with, and what comes back is checked before anyone reads it.
