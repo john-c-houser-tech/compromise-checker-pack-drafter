@@ -21,6 +21,18 @@ def test_the_bands_are_the_checkers_at_the_pinned_commit():
     assert set(vocabulary.BANDS) == set(vocabulary.CHECKS)
 
 
+def test_the_bands_are_right_by_hand():
+    # Read off the checker's docs/checks.md and checks by a person, not the parser:
+    # continuation rows (a blank Check cell), a digit in an id, a band in the prose.
+    assert vocabulary.BANDS["pam.changes"] == ("medium", "high")  # a PAM line: high
+    assert vocabulary.BANDS["account.uid0"] == ("medium", "critical")  # shared UIDs: medium
+    assert vocabulary.BANDS["package.changed"] == ("info", "critical")
+    assert vocabulary.BANDS["kernel.taint"] == ("low", "critical")
+    assert vocabulary.BANDS["system.reboot"] == ("info", "medium")  # unclean: medium
+    assert vocabulary.BANDS["web.worker_child"] == ("medium", "high")
+    assert vocabulary.BANDS["web.errors"] == ("low", "low")
+
+
 def test_how_far_a_pack_may_raise_a_check():
     assert vocabulary.BANDS["web.worker_child"] == ("medium", "high")  # an interpreter: medium
     assert (vocabulary.floor("web.worker_child"), vocabulary.ceiling("web.worker_child")) == (
@@ -76,9 +88,10 @@ def test_the_signed_php2shell_weights_pass():
     )
 
 
-def test_every_weight_needs_its_reason():
+def test_a_weight_with_no_reason_is_a_note_not_a_refusal():
     out = _checked("- id: hit\n  check: web.new_script_hit\n  likelihood_ratio: 50\n", weights=[])
-    assert "detection hit: no reason for its weight in weights" in out.problems
+    assert out.problems == []
+    assert "detection hit: the AI gave no reason for its weight" in out.notes
 
 
 def test_the_header_gives_each_weight_with_its_reason(approved_store):  # noqa: F811
@@ -93,8 +106,14 @@ def test_the_header_gives_each_weight_with_its_reason(approved_store):  # noqa: 
     text = draft.render(made, "2026-11-09 10:00 UTC")
     assert "# Weights, with the AI's reasons" in text
     header = " ".join(line.lstrip("#- ") for line in text.split("# Weights", 1)[1].splitlines())
-    assert "worker-child (web.worker_child, band medium/high) at 100: A web worker" in header
+    assert "worker-child (web.worker_child, band medium to high) at 100: A web worker" in header
     assert "starting a shell is this flaw working." in header
     import yaml
 
     assert "weights" not in yaml.safe_load(text)  # D12: the header only, not the pack
+
+
+def test_a_raise_its_lower_findings_cant_reach_is_a_note():
+    out = _checked("- id: wc\n  check: web.worker_child\n  likelihood_ratio: 100\n")
+    assert out.problems == []
+    assert any("its medium findings rise only to 20" in n for n in out.notes)

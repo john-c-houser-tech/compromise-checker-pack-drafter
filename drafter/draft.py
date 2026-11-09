@@ -462,16 +462,19 @@ Rules:
   fields. If no sign of this threat shows in what the tool collects, give fewer
   detections, or none ([]), and say so in the unknowns.
 - Weights. A likelihood_ratio says how much more likely a host is compromised than
-  not when the sign shows. The tool's bands: info 1 (doesn't count), low 1.5 (an
+  not when the sign shows. The tool's bands: info 1 (alone doesn't count), low 1.5 (an
   unexplained reboot), medium 4 (a direct root login, a new cron job), high 20 (a
   web shell, a shell on a network socket), critical 100 (a second UID 0 account, a
   hidden process). Each built-in check below shows its band in [brackets]. Naming a
   built-in check raises its findings to your ratio while the detection counts, but
-  never more than one band above its own (low to 4, medium to 20, high to 100), and
+  never more than one band above its own (info to 1.5, low to 4, medium to 20, high to
+  100; a check with several bands is raised finding by finding), and
   never lowers them: a ratio above one band over its highest is refused, and
-  one at or below its lowest band adds nothing. Raise a sign when it is what this
-  threat's success looks like on a host exposed to it (a new SSH key for root after an
-  authentication bypass in the SSH server: high to critical). Leave signs that clean
+  one at or below its lowest band adds nothing (fine when the point is to tie the sign
+  to this threat's window: say so in its reason). Any value up to the limit will do, not
+  only a band's (50 is between high and critical). Raise few signs: only one that is what
+  this threat's success looks like on a host exposed to it (a new SSH key for root after
+  an authentication bypass in the SSH server: high to critical). Leave signs that clean
   hosts show too (crashes, error bursts, core dumps) at or near their band: most
   signs of a memory-corruption bug are weak, since a crash isn't a compromise. The
   pack's own rules weigh at most 20.
@@ -713,7 +716,8 @@ def _weights(out: Checked, answer: dict) -> None:
             continue
         name = str(d.get("id", "?"))
         if not reasons.get(name):
-            out.problems.append(f"detection {name}: no reason for its weight in weights")
+            # Asked for, not required: one missing sentence isn't worth a second request.
+            out.notes.append(f"detection {name}: the AI gave no reason for its weight")
         else:
             out.weights.append((name, reasons[name]))
         check_id, ratio = d.get("check"), d.get("likelihood_ratio")
@@ -722,12 +726,17 @@ def _weights(out: Checked, answer: dict) -> None:
             and check_id in vocabulary.BANDS
             and isinstance(ratio, int | float)
         ):
+            low = vocabulary.BANDS[check_id][0]
             if ratio <= vocabulary.floor(check_id):
-                low = vocabulary.BANDS[check_id][0]
                 out.notes.append(
                     f"detection {name} names {check_id} at {ratio:g}, at or below its lowest"
                     f" band ({low}, {vocabulary.floor(check_id):g}): it raises none of its"
                     " findings"
+                )
+            elif vocabulary.raised_to(check_id, ratio) < min(ratio, vocabulary.ceiling(check_id)):
+                out.notes.append(
+                    f"detection {name} names {check_id} at {ratio:g}: its {low} findings rise"
+                    f" only to {vocabulary.raised_to(check_id, ratio):g} (one band over theirs)"
                 )
 
 
@@ -755,7 +764,7 @@ def _vocabulary_problems(detections: list) -> list[str]:
                 bands = low if low == high else f"{low} to {high}"
                 problems.append(
                     f"detection {name}: {check_id} is in the {bands} band; a pack may raise"
-                    f" it to at most {vocabulary.ceiling(check_id):g}, not {ratio:g} (D11)"
+                    f" it to at most {vocabulary.ceiling(check_id):g}, not {ratio:g}"
                 )
         events = d.get("events")
         any_of = events.get("any_of") if isinstance(events, dict) else None
@@ -1083,7 +1092,7 @@ def render(d: Draft, made: str) -> str:
                         and str(x.get("id")) == name), {})  # fmt: skip
             check_id = det.get("check")
             what = (
-                f"{check_id}, band {'/'.join(dict.fromkeys(vocabulary.BANDS[check_id]))}"
+                f"{check_id}, band {' to '.join(dict.fromkeys(vocabulary.BANDS[check_id]))}"
                 if check_id in vocabulary.BANDS
                 else "its own rule"
             )

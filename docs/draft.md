@@ -165,8 +165,10 @@ check's findings, while the detection counts, and never by more than one band
 each check's bands in brackets (`web.worker_child [medium to high]`), from the
 checker's `docs/checks.md` at the pinned commit (`drafter/vocabulary.py`, kept by
 `scripts/vocabulary.py`, held by a drift test), with that rule and what a raise is
-for. Their one example of a raise comes from no signed pack's threat, so it can't
-hand a draft the answer to a pack it is compared with.
+for. Their one example of a raise comes from no signed pack's threat (a test keeps
+PHP out of that rule). The pack format the instructions also carry is the checker's
+own documentation, and its example is a PHP pack (worker-child at 10, a worker-crash
+rule at 8): a PHP2Shell draft is never quite a blind test.
 
 The answer gives, for each detection, one sentence on why its weight
 (`weights`). Then:
@@ -176,7 +178,8 @@ The answer gives, for each detection, one sentence on why its weight
   shares the check, for a weight a person edits;
 - **a weight at or below the check's lowest band is a note** for the signer: it adds
   nothing to the score, which may be meant (to tie the sign to the window);
-- **a detection with no reason is refused**;
+- **a detection with no reason is a note**, not a refusal: one missing sentence
+  isn't worth a second request;
 - **the reasons go in the draft's header only** (D12), each with its check's band,
   never into the pack.
 
