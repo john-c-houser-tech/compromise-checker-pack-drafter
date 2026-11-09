@@ -40,6 +40,15 @@ no build but those listed; the draft and the report then say so.
 Rocky Linux and AlmaLinux rebuilds of Red Hat's fixes fall under the RHEL entries:
 their versions match the same patterns and compare as fixed.
 
+Ubuntu's record gives the **source** package's versions and fix, and each binary's
+own fixed version (`binary_version`). They are usually the same; when a binary's
+differs (dotnet8 `8.0.132-8.0.32-0ubuntu1~24.04.1` builds aspnetcore-runtime-8.0
+`8.0.32-0ubuntu1~24.04.1`), its entries use the binary's: an installed package only
+ever carries that, and the source's would make a patched host read vulnerable. The
+listed versions are mapped the same way when the binary's fix is the source's after
+its first hyphen; any other relation is for a person ("give them by hand"). A record
+with no fix has nothing to map: a binary's version there is only its current build.
+
 ## The `versions` patterns, by rule
 
 The expensive failure is a vulnerable host read as fixed or not affected, so the

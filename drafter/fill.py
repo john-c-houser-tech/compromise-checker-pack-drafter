@@ -267,12 +267,12 @@ def ubuntu_entries(record: dict, cve: str, filters: list[str], draft: Draft) -> 
             draft.conflicts.append(f"{release}: Ubuntu's fixed version is unreadable; left out")
             continue
         specific = affected.get("ecosystem_specific") or {}
-        binaries = [
-            b.get("binary_name")
+        given = [
+            b
             for b in (specific.get("binaries") if isinstance(specific, dict) else None) or []
             if isinstance(b, dict)
         ]
-        names = _split(binaries, filters, release, draft)
+        names = _split([b.get("binary_name") for b in given], filters, release, draft)
         if not names:
             continue
         listed = [
@@ -280,21 +280,74 @@ def ubuntu_entries(record: dict, cve: str, filters: list[str], draft: Draft) -> 
             for v in affected.get("versions") or []
             if isinstance(v, str) and _VERSION.fullmatch(v)
         ]
-        shapes = sorted({ubuntu_shape(v) for v in [*listed, *([fixed] if fixed else [])]})
-        if not shapes:
-            shapes = [None]  # no version at all: every build, judged against the fix
-        for shape in shapes:
-            out.append(
-                Entry(
-                    release=release,
-                    binary_names=names,
-                    versions=shape,
-                    fixed=fixed,
-                    source=source,
-                    origin="ubuntu",
-                    note="" if fixed else "no fix from Ubuntu yet",
-                )
+        # The versions and the fix are the source package's; a binary can carry its
+        # own (dotnet8 8.0.132-8.0.32-… builds aspnetcore-runtime-8.0 8.0.32-…), and
+        # an installed package only ever has the binary's.
+        # With no fix, a binary's version is only its current build: nothing to map.
+        own = {
+            b.get("binary_name"): b.get("binary_version")
+            for b in given
+            if fixed is not None
+            and isinstance(b.get("binary_version"), str)
+            and b["binary_version"] != fixed
+        }
+        groups: dict[str | None, list[str]] = {}
+        for name in names:
+            groups.setdefault(own.get(name), []).append(name)
+        for binary_fixed, group in sorted(groups.items(), key=lambda g: g[0] or ""):
+            if binary_fixed is None:
+                group_fixed, group_listed = fixed, listed
+            else:
+                mapped = _binary_versions(fixed, binary_fixed, listed)
+                if mapped is None:
+                    draft.conflicts.append(
+                        f"{release} {', '.join(group)}: Ubuntu's binaries are fixed at"
+                        f" {_clean(binary_fixed, 60)}, not the source's {_clean(fixed, 60)},"
+                        " in a way the fill can't map to their earlier builds; give them by hand"
+                    )
+                    continue
+                group_fixed, group_listed = binary_fixed, mapped
+            shapes = sorted(
+                {ubuntu_shape(v) for v in [*group_listed, *([group_fixed] if group_fixed else [])]}
             )
+            if not shapes:
+                shapes = [None]  # no version at all: every build, judged against the fix
+            for shape in shapes:
+                out.append(
+                    Entry(
+                        release=release,
+                        binary_names=group,
+                        versions=shape,
+                        fixed=group_fixed,
+                        source=source,
+                        origin="ubuntu",
+                        note=(
+                            "no fix from Ubuntu yet"
+                            if not group_fixed
+                            else "the binaries' own versions, not the source's"
+                            if binary_fixed
+                            else ""
+                        ),
+                    )
+                )
+    return out
+
+
+def _binary_versions(fixed: str | None, binary_fixed: str, listed: list[str]) -> list[str] | None:
+    """The binaries' versions for the source's listed ones, when the binary's fix is the
+    source's after its first hyphen (dotnet8 8.0.132-8.0.32-0ubuntu1 builds 8.0.32-0ubuntu1):
+    each listed version mapped the same way. None for any other relation: the fill
+    doesn't guess."""
+    if not fixed or "-" not in fixed or fixed.split("-", 1)[1] != binary_fixed:
+        return None
+    out = []
+    for version in listed:
+        if version.count("-") < 2:
+            return None  # a listed build of another shape: not mapped by the same rule
+        mapped = version.split("-", 1)[1]
+        if not _VERSION.fullmatch(mapped):
+            return None
+        out.append(mapped)
     return out
 
 
