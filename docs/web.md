@@ -128,7 +128,10 @@ At most four a threat, counted across its approves: deciding again keeps them.
 The next draft sends them after the vendors' records and before the linked pages,
 and keeps them longest when the cap needs room (`docs/draft.md`). A page the drafter
 reads already (a vendor's record, or one it links to that the drafter fetches by
-itself) isn't added again; one the linked pages give, one hop further, is offered.
+itself) isn't added again; one the linked pages give, one hop further, is offered. That includes the links a page names in its link text ("NCSC-NL's
+repository"), read from its HTML: the links in its main content to other sites, not
+its menus, footers, share links or CVE records, listed before addresses written out
+in its words, 15 at most.
 
 The one-hop list needs the linked pages read. A draft reads them, but so does
 **Read the linked pages** on the card, for nothing: it fetches them by B.1's rules

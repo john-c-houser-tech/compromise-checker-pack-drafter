@@ -523,3 +523,50 @@ def test_the_card_offers_what_a_linked_page_links_to(page, monkeypatch):  # noqa
     _post_source(page, _source_form(page, 1, action="read"))
     _, html = page.request("GET")
     assert 'value="https://github.com/NCSC-NL/php2shell"' in html
+
+
+def test_links_skip_menus_shares_subdomains_and_records():
+    from drafter import linked
+
+    base = "https://www.cisa.gov/news-events/alerts/2026/10/21/a"
+    body = b"""<html><body><header><a href="https://usa.gov/">usa</a></header>
+    <p><a href="https://github.com/NCSC-NL/php2shell">repo</a>
+    <a href="https://www.facebook.com/sharer?u=https://www.cisa.gov/x">share</a>
+    <a href="https://us-cert.cisa.gov/old">old</a>
+    <a href="https://www.cve.org/CVERecord?id=CVE-2026-109618">cve</a></p>
+    <footer><a href="https://whitehouse.gov/">wh</a></footer></body></html>"""
+    assert linked.html_links(body, base) == ["https://github.com/NCSC-NL/php2shell"]
+    in_main = b"""<main><nav><a href="https://x.example/menu">m</a></nav>
+    <a href="https://y.example/real">r</a><footer><a href="https://z.example/f">f</a></footer></main>"""
+    assert linked.html_links(in_main, base) == ["https://y.example/real"]
+
+
+def test_a_page_of_many_links_is_read_quickly():
+    import time
+
+    from drafter import linked
+
+    body = (
+        b"<main>"
+        + b"".join(b'<a href="https://e%d.example/p">x</a>' % i for i in range(110_000))
+        + b"</main>"
+    )
+    started = time.monotonic()
+    found = linked.html_links(body, "https://www.cisa.gov/a")
+    assert len(found) == linked.MAX_LINKS and time.monotonic() - started < 5
+
+
+def test_offers_are_plain_addresses_page_links_first_and_whole():
+    rlo = "https://evil.example/\u202egpj.exe"
+    homograph = "https://\u0430pple.com/"
+    offered = added.further(
+        ["words name https://words.example/a"],
+        set(),
+        urls=[
+            "https://links.example/a b",
+            "https://links.example/wiki/PHP_(language)",
+            rlo,
+            homograph,
+        ],
+    )
+    assert offered == ["https://links.example/wiki/PHP_(language)", "https://words.example/a"]
