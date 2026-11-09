@@ -150,6 +150,21 @@ def branch_of(version: str) -> str:
     return ".".join(parts[:2])
 
 
+_REMI_COLLECTION = re.compile(r"php(\d)(\d)-")
+_REMI_MODULE = re.compile(r"\.module_php\.(\d+\.\d+)\.")
+
+
+def remi_php_branch(name: str, rel: str) -> str | None:
+    """The PHP branch a Remi package belongs to: its collection's (php83-php-fpm is
+    8.3) or its module stream's (8.3.36-1.module_php.8.3.el9.remi). None when
+    neither says. An extension built for a branch (php83-php-pecl-protobuf 5.36.2)
+    carries its own version, not PHP's: `remi_proposals` leaves those out, since a
+    PHP threat is in PHP's own packages and an extension's version says nothing of
+    PHP's fix."""
+    found = _REMI_COLLECTION.match(name) or _REMI_MODULE.search(rel)
+    return ".".join(found.groups()) if found else None
+
+
 def _clean(text: str, limit: int = 200) -> str:
     return "".join(ch if ch.isprintable() else "?" for ch in text.strip())[:limit]
 
@@ -570,7 +585,10 @@ def remi_proposals(
                     continue
                 if "remi" not in p["rel"] or not _VERSION.fullmatch(f"{p['ver']}-{p['rel']}"):
                     continue
-                build = builds.setdefault(branch_of(p["ver"]), {}).setdefault(
+                branch = branch_of(p["ver"])
+                if remi_php_branch(p["name"], p["rel"]) != branch:
+                    continue  # an extension, at its own version, or no branch shown
+                build = builds.setdefault(branch, {}).setdefault(
                     (p["ver"], p["rel"]), {"names": set(), "log": [], "epoch": p["epoch"]}
                 )
                 build["names"].add(p["name"])

@@ -359,6 +359,8 @@ def test_the_template_suggests_and_parses_once_filled(store, tmp_path, clone, re
     assert data["reviewed_by"] == "" and data["exposure"]["likelihood_ratio"] == 0
     assert isinstance(data["exposure"]["window_start"], dt.datetime)
     assert "CISA listed it on 2026-10-27" in text
+    # No other pack's weight as a hint: it anchors the choice (A.9).
+    assert "PHP2Shell" not in text and "at most 10" in text
 
 
 # after signing
