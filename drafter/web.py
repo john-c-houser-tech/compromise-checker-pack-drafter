@@ -100,7 +100,8 @@ class Site:
     token: str = field(default_factory=lambda: secrets.token_urlsafe(32))
     now: Callable[[], dt.datetime] = timeutil.now
     fetch_added: Callable = field(default_factory=lambda: added.get)  # B.2's open fetcher
-    feed_fetcher: Callable = field(default_factory=lambda: Fetcher)  # B.1's, for the button
+    # B.1's fetcher, for the button: one try, 15 seconds, so a click can't hang long
+    feed_fetcher: Callable = field(default_factory=lambda: lambda: Fetcher(timeout=15, attempts=1))
 
     @property
     def store_path(self) -> Path:
@@ -225,7 +226,7 @@ def view(site: Site, store: Store) -> dict:
             card = _card(group, by_cve, listed, older, known, signed)
             st = card["state"]
             card["sources"] = (
-                _sources(store, st.decision) if st.word == "approve" and st.decision else None
+                _sources(store, st.decision, now) if st.word == "approve" and st.decision else None
             )
             built.append(card)
             if card["decidable"]:
@@ -261,7 +262,7 @@ def view(site: Site, store: Store) -> dict:
     }
 
 
-def _sources(store: Store, decision: decisions.Decision) -> dict:
+def _sources(store: Store, decision: decisions.Decision, now: dt.datetime) -> dict:
     """B.2, for an approved threat's card: the pages a person added, and the
     addresses the pages already read give that nothing has read (one click adds one)."""
 
@@ -269,7 +270,8 @@ def _sources(store: Store, decision: decisions.Decision) -> dict:
     texts = [text for _, text, _ in added.pages(store, decision.id)]
     reads = _read_already(store, decision)
     links = linked.links(reads)
-    read = 0
+    ctx = Context(store=store, fetcher=None, now=lambda: now)
+    read = sum(1 for link in links[: linked.MAX_PAGES] if linked._recent(ctx, link.fetch))
     for link in links:
         row = store.db.execute(
             "SELECT id FROM fetches WHERE feed = ? AND url = ? AND status = 200"
@@ -283,7 +285,6 @@ def _sources(store: Store, decision: decisions.Decision) -> dict:
                 text = None
             if text:
                 texts.append(text)
-                read += 1
     # Offered unless read already: by hand, or as a linked page the drafter fetches.
     have = {a.url for a in records} | {li.url for li in linked.links(reads)}
     kept = [a for a in records if a.kept]
@@ -293,8 +294,8 @@ def _sources(store: Store, decision: decisions.Decision) -> dict:
         "most": added.MAX_ADDED,
         "room": added.MAX_ADDED - len(kept),
         "further": added.further(texts, have),
-        "linked": len(links),
-        "linked_read": read,
+        "linked": min(len(links), linked.MAX_PAGES),  # a draft reads six at most
+        "linked_read": read,  # in the last day, as a draft would reuse them
     }
 
 
@@ -621,9 +622,8 @@ def _source_post(handler: Handler, fields: dict[str, str]) -> None:
                     # each kept as a fetch; nothing goes to the AI.
                     ctx = Context(store=store, fetcher=site.feed_fetcher(), now=site.now)
                     got = linked.gather(ctx, _read_already(store, decision))
-                    failed = [x for x in got.left_out if "over the" not in x]
-                    if failed:
-                        error = "Some linked pages couldn't be read: " + "; ".join(failed[:6])
+                    if got.failed:
+                        error = "Some linked pages couldn't be read: " + "; ".join(got.failed[:6])
                 elif fields["action"] == "remove":
                     added.take_back(store, decision_id, int(fields.get("added", "0")), site.now)
                 else:

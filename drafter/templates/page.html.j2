@@ -104,7 +104,7 @@
       {% endif %}
       {% if c.sources %}
       {% set src = c.sources %}
-      <details class="sources"{% if src.added or kept.anchor == c.anchor %} open{% endif %}><summary>Sources you added ({{ src.added|selectattr("kept")|list|length }} of {{ src.most }})</summary>
+      <details class="sources"{% if src.added or src.further or kept.anchor == c.anchor %} open{% endif %}><summary>Sources you added ({{ src.added|selectattr("kept")|list|length }} of {{ src.most }})</summary>
         <p class="hint">For pages no record links to: a researcher's write-up, a first sighting, a bulletin. Fetched once, now; any https site but private addresses. In the next draft, after the vendors' records and before the linked pages; kept longest when the cap needs room.</p>
         {% if src.added %}
         <ul class="added">
@@ -125,7 +125,7 @@
           <input type="hidden" name="token" value="{{ token }}"><input type="hidden" name="decision" value="{{ src.decision }}"><input type="hidden" name="anchor" value="{{ c.anchor }}">
           <button type="submit" name="action" value="read" class="btn btn-small">Read the linked pages</button>
         </form>
-        <span class="when">{{ src.linked_read }} of {{ src.linked }} read{% if src.linked_read < src.linked %}: reading them shows what they link to, below, before any draft. Free: nothing goes to the AI.{% endif %}</span>
+        <span class="when">{{ src.linked_read }} of {{ src.linked }} read in the last day{% if src.linked_read < src.linked %}: reading them shows what they link to, below, before any draft. Free: nothing goes to the AI.{% endif %}</span>
         {% endif %}
         {% if src.room > 0 %}
         <form class="add" method="post" action="/source">

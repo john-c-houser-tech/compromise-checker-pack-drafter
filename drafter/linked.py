@@ -356,6 +356,7 @@ class Gathered:
     pages: list[Page]
     left_out: list[str]  # each with why: over six, over the budget, couldn't be read
     pending: list[Link] = field(default_factory=list)  # offline: not read in the last day
+    failed: list[str] = field(default_factory=list)  # those of left_out that couldn't be had
 
 
 def gather(
@@ -390,6 +391,7 @@ def gather(
             page = fetch(ctx, link, row, offline=offline)
         except (FetchError, ValueError) as exc:
             out.left_out.append(f"{link.url} ({link.kind.name}): {str(exc)[:120]}")
+            out.failed.append(out.left_out[-1])
             continue
         except sqlite3.OperationalError:
             out.left_out.append(f"{link.url} ({link.kind.name}): the store was busy")

@@ -6,6 +6,7 @@ import io
 import socket
 import sqlite3
 import urllib.parse
+from pathlib import Path
 
 import pytest
 
@@ -467,9 +468,28 @@ def test_reading_the_linked_pages_fills_the_one_hop_list_for_nothing(page, monke
     page.site.feed_fetcher = lambda: fake
     page.post(page.form())
     _, html = page.request("GET")
-    assert "Read the linked pages" in html and "0 of 1 read" in html
+    assert "Read the linked pages" in html and "0 of 1 read in the last day" in html
     assert "https://github.com/NCSC-NL/php2shell" not in html
     response, _ = _post_source(page, _source_form(page, 1, action="read"))
     assert response.status == 303 and [c["url"] for c in fake.calls] == [alert]
     _, html = page.request("GET")
-    assert "1 of 1 read" in html and "https://github.com/NCSC-NL/php2shell" in html
+    assert "1 of 1 read in the last day" in html and "https://github.com/NCSC-NL/php2shell" in html
+
+
+def test_a_linked_page_that_cant_be_read_is_said(page, monkeypatch):  # noqa: F811
+    from drafter import web
+    from tests.conftest import FakeFetcher
+
+    alert = "https://www.cisa.gov/news-events/alerts/2026/10/21/critical-php"
+    monkeypatch.setattr(web, "_read_already", lambda store, decision: {alert})
+    page.site.feed_fetcher = lambda: FakeFetcher()  # answers 404 to everything
+    page.post(page.form())
+    response, html = _post_source(page, _source_form(page, 1, action="read"))
+    assert response.status == 400 and "couldn&#39;t be read" in html and "HTTP 404" in html
+
+
+def test_the_button_fetcher_tries_once_briefly():
+    from drafter import web
+
+    fetcher = web.Site(home=Path("/nowhere")).feed_fetcher()
+    assert (fetcher._timeout, fetcher._attempts) == (15, 1)
