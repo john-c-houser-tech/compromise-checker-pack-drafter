@@ -468,7 +468,7 @@ Rules:
   hidden process). Each built-in check below shows its band in [brackets]. Naming a
   built-in check raises its findings to your ratio while the detection counts, but
   never more than one band above its own (low to 4, medium to 20, high to 100), and
-  never lowers them: a ratio at or above one band over its highest is refused, and
+  never lowers them: a ratio above one band over its highest is refused, and
   one at or below its lowest band adds nothing. Raise a sign when it is what this
   threat's success looks like on a host exposed to it (a new SSH key for root after an
   authentication bypass in the SSH server: high to critical). Leave signs that clean
