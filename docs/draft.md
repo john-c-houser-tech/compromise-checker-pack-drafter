@@ -36,6 +36,37 @@ JSON shape (structured output). It holds:
   title, details, statement, mitigation, references), never their package lists.
   A source longer than 20,000 characters is cut, and says so where it is cut, and
   its `<`, `>` and `&` are escaped, so it can't close its block or pose as another.
+- **the pages they link to (B.1)**, of five kinds only (D8), in this order: a
+  project's GitHub security advisory and a reviewed GitHub advisory (through GitHub's
+  API, as JSON; one linked both ways is read once, as the project's), a Red Hat
+  security bulletin, an Ubuntu security notice (Ubuntu's JSON, without its package
+  list) and a CISA alert (the page's own words, not its menus or scripts). At most six
+  are read (a page that can't be fetched or read doesn't use one), sharing 100,000
+  characters (D10), each counted as sent, cut at 20,000. A redirect may not leave the
+  page's site. A page read in the last day is read again from the store (feed
+  `linked`), so a draft reads what its dry run did, if within the day.
+  `drafter/linked.py`.
+
+  Then the cap: linked pages are left out, the last in D8's order first, until the
+  draft fits the $0.75 a draft may cost (D6) with room for a second try after a
+  typical first answer (`draft.fit`). The drafter's estimate is high on purpose (2
+  characters a token), so this leaves out more than the real cost would; under it
+  about 65,000 characters of linked pages fit, and all five of PHP2Shell's (about
+  24,000). Everything left out, and why, is named in the draft's header.
+
+  Each page starts with its address, the only address it makes citable: a project's
+  advisory is written by whoever runs the project, so the addresses in it aren't
+  vouched for. Its words, as sent (never what was cut off), count for the A.6 checks:
+  a setting or command in it may be used. A package a linked notice names doesn't
+  become one the answer may name: only the vendors' own records allow that.
+  Assembly (`drafter pack write`) reads the same pages back from the store, by the
+  fetch numbers in the draft's header, and holds the prose to them too.
+
+`--dry-run` reads the store and nothing else: it fetches no page. One not read in
+the last day is listed as one the draft will fetch, and stands in at 20,000
+characters for the estimate and the cap. That is an estimate, not a bound (a page's
+escaped characters can make it longer): the draft checks the caps again with the
+real pages before anything is sent.
 
 The sources are fetched text, untrusted. The instructions say so, the model has no
 tools to act with, and what comes back is checked before anyone reads it.
@@ -134,7 +165,9 @@ Measured first: one brotli draft cost $0.093 on Opus 5.5 and $0.044 on Sonnet 5.
 from the same input (about 8,500 tokens in, 3,000 out); Opus was the more accurate.
 
 - **Model:** Claude Opus 5.5.
-- **At most $0.50 a draft**, both requests together.
+- **At most $0.75 a draft**, both requests together. It was $0.50 until B.1: with
+  the linked pages and room for a second try, about 40,000 characters of them fitted
+  (John raised it, 2026-11-09). A real draft still costs about $0.15 to $0.20.
 - **At most $10 for the plan**, and the drafter stops before a request that could
   take the total past **$5** and says so: John asked to be told then.
   `--past-tell-mark` goes on, once he has said so.
@@ -143,7 +176,7 @@ A request is sent only if its worst case fits both caps: input estimated at two
 characters a token (high, on purpose), plus, for a second try, every token the first
 answer used (its thinking is sent back and billed, though its text comes back empty), all of it billed as a cache write, and every
 one of the 8,000 output tokens allowed used (the measured draft used 2,935, thinking
-included; a lower allowance leaves room within $0.50 for a second try). An answer cut
+included; a lower allowance leaves room within the cap for a second try). An answer cut
 off at the allowance (`max_tokens`) is recorded and reported, not tried again. Each request is recorded in the store before
 it is sent, at that worst case, then settled with the real figures. A request that
 got no answer (a timeout, a dropped connection) keeps its worst case, since it may

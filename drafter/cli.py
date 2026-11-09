@@ -172,7 +172,7 @@ def _parser() -> argparse.ArgumentParser:
     drafting.add_argument(
         "--dry-run",
         action="store_true",
-        help="show what would be sent and its most possible cost; send nothing",
+        help="show what would be sent and its most possible cost; send nothing to the AI",
     )
     drafting.add_argument(
         "--past-tell-mark",
@@ -524,8 +524,17 @@ def _draft_cves(args) -> list[str] | None:
     return cves
 
 
+def _gather(store: Store, found: list, *, offline: bool = False):
+    """B.1: the linked pages, fetched (or read again from the store) for a draft. A
+    dry run reads the store only: it records nothing, so it fetches nothing."""
+    from drafter import linked
+
+    ctx = Context(store=store, fetcher=Fetcher(), sleep=time.sleep)
+    return linked.gather(ctx, frozenset().union(*(s.urls for s in found)), offline=offline)
+
+
 def _draft_dry(store: Store, args) -> int:
-    from drafter import draft
+    from drafter import draft, linked
 
     cves = _draft_cves(args)
     if cves is None:
@@ -536,11 +545,30 @@ def _draft_dry(store: Store, args) -> int:
         print(safe(exc), file=sys.stderr)
         return 1
     found = draft.sources(store, list(decision.cves))
+    gathered = _gather(store, found, offline=True) if found else None
+    pending = gathered.pending if gathered else []
+    over: list[str] = []
+    if gathered is not None:
+        # A page the draft will fetch stands in at its longest, for the estimate.
+        # In D8's order, as the draft will hold them, so the same pages are left out.
+        pages = [(p.link, draft.linked_sources([p])[0]) for p in gathered.pages]
+        pages += [(li, draft.linked_source(li, "x" * linked.MAX_PAGE, 0, None)) for li in pending]
+        pages.sort(key=lambda pair: linked.rank(pair[0]))
+        found, over = draft.fit(list(decision.cves), found + [s for _, s in pages])
+        kept = {s.url for s in found}
+        pending = [li for li in pending if li.fetch in kept]
+        found = [s for s in found if s.fetch_id != 0 or not s.linked]
     messages = [{"role": "user", "content": draft.user_message(list(decision.cves), found)}]
     tokens = draft.estimate(draft.SYSTEM, messages)
+    tokens += len(pending) * (linked.MAX_PAGE + 200) // draft.CHARS_PER_TOKEN
     print(f"approved {decision.decided_at[:10]}: {', '.join(decision.cves)}")
     for s in found:
         print(safe(f"  source: {s.name} ({len(s.text)} characters, fetch {s.fetch_id})"))
+    for link in pending:
+        print(safe(f"  the draft will fetch: {link.url} ({link.kind.name}), counted at its most,"
+                   f" {linked.MAX_PAGE:,} characters"))  # fmt: skip
+    for line in (gathered.left_out if gathered else []) + over:
+        print(safe(f"  not sent: {line}"))
     print(
         f"about {tokens} tokens in, by the rough estimate; at most"
         f" ${draft.worst_cost(tokens):.2f} for the first request (cap ${draft.PER_DRAFT_CAP:.2f}"
@@ -599,11 +627,14 @@ def _draft(store: Store, args, cves: list[str]) -> int:
 
     client = anthropic.Anthropic(max_retries=0)
     try:
+        decision = draft.approved(store, cves)
+        found = draft.sources(store, list(decision.cves))
         made = draft.draft(
             store,
             cves,
             client,
             past_tell=args.past_tell_mark,
+            gathered=_gather(store, found) if found else None,
         )
     except draft.DraftError as exc:
         print(safe(exc), file=sys.stderr)

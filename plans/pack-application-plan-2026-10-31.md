@@ -215,7 +215,9 @@ first new threat for real, through review, proof and John's signature.
   run with John's OK, under a Linode cap of $10 for this plan, stopping to tell John
   at $5.
 - **D6. AI budget? DECIDED (John, 2026-11-08):** Claude Opus 5.5; at most $0.50 a
-  draft and $10 for the plan, stopping to tell John at $5. Measured first on one
+  draft and $10 for the plan, stopping to tell John at $5. **Per-draft cap raised to
+  $0.75 (John, 2026-11-09)** for B.1's linked pages: under $0.50, with room for a
+  second try, the drafter's high estimate let only about 40,000 characters of them in. Measured first on one
   brotli draft from the same input: Opus 5.5 $0.093, Sonnet 5.5 $0.044; Opus the more
   accurate (Sonnet gave NVD's score to CISA and cited another CVE's page).
 - **D7. Where does it run? DECIDED (John, 2026-11-07), for now:** on the laptop,
