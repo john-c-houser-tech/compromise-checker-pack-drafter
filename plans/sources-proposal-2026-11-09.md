@@ -1,6 +1,6 @@
 # Proposal: sources beyond the vendor records (2026-11-09)
 
-**Status: proposed, waiting for John.**
+**Status: approved as written (John, 2026-11-09). D8–D10 to settle, one at a time.**
 
 ## The problem
 
