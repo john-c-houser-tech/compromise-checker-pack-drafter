@@ -21,10 +21,10 @@ first.
 |---|---|---|---|
 | `kev` | CISA's Known Exploited Vulnerabilities list, whole, when it changes (`If-None-Match`) | every new version | on CISA's list (D3) |
 | `nvd` | NVD's CVE API: every CVE changed since the saved position, in windows of 7 days and pages of 2,000 | every page | CISA's SSVC "exploitation: active" (D3) |
-| `osv-ubuntu` | OSV's Ubuntu `modified_id.csv`, then each record not yet read at its listed version | hash of the index; record bodies only for signs of exploitation (below) | Ubuntu's priority, `critical` being its top (D3) |
+| `osv-ubuntu` | OSV's Ubuntu `modified_id.csv`, then each record not yet read at its listed version | hash of the index; record bodies only for CVEs rated `critical` (below) | Ubuntu's priority: shown on an attacked CVE, and counted; a rating alone lists nothing since 2026-11-10 ([candidates.md](candidates.md)) |
 | `osv-almalinux`, `osv-rockylinux` | the same for AlmaLinux and Rocky Linux | hash of the index; every record | fixed builds for A.3 |
 | `usn` | Ubuntu Security Notices, newest first, back to the saved position | every page | notice ids and dates for A.3 |
-| `redhat` | Red Hat's Security Data API: CVEs rated Critical, made public since 30 days before the last read | every page | Red Hat's top severity (D3) |
+| `redhat` | Red Hat's Security Data API: CVEs rated Critical, made public since 30 days before the last read | every page | Red Hat's top severity: shown and counted the same way |
 
 Not read here: Red Hat's CSAF/VEX files and the full records of non-critical
 Ubuntu CVEs. A.3 fetches those per threat, when it needs them. A draft fetches the

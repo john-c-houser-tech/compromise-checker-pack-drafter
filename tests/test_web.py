@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import http.client
+import json
 import re
 import sqlite3
 import threading
@@ -44,13 +45,16 @@ def _php(store):
 
 def test_a_decision_is_kept_with_its_cves_and_reason(store):
     _seed(store)
-    d = decisions.record(store, _php(store), "approve", "  PHP2Shell\n again ", "jch", "t1")
+    d = decisions.record(
+        store, _php(store), "approve", "  PHP2Shell\n again ", "jch", "t1", leaves=" a\twebshell "
+    )
+    assert d.leaves == "a webshell"
     assert d.cves == PHP and d.reason == "PHP2Shell again" and d.families == ("php",)
     [back] = decisions.history(store)
     assert back == d
     st = decisions.state(_php(store), decisions.latest([back]))
     assert st.word == "approve" and not st.open
-    assert decisions.describe(st) == "approved t1: PHP2Shell again"
+    assert decisions.describe(st) == "approved t1: PHP2Shell again (would leave: a webshell)"
 
 
 def test_decisions_are_append_only(store):
@@ -64,7 +68,7 @@ def test_decisions_are_append_only(store):
 def test_a_later_decision_stands_in_front(store):
     _seed(store)
     decisions.record(store, _php(store), "reject", "not yet", "jch", "t1")
-    decisions.record(store, _php(store), "approve", "now it is", "jch", "t2")
+    decisions.record(store, _php(store), "approve", "now it is", "jch", "t2", leaves="a webshell")
     decided = decisions.history(store)
     assert [d.reason for d in decided] == ["now it is", "not yet"]
     assert decisions.state(_php(store), decisions.latest(decided)).word == "approve"
@@ -74,7 +78,7 @@ def test_a_cve_that_joins_later_asks_for_a_look_again(store):
     _nvd(store, PHP[0], "2026-10-21T00:00:00.000000Z")
     _vendor(store, PHP[0], "ubuntu", [_pkg("ubuntu:24.04", "php8.3")])
     _vendor(store, PHP[0], "redhat", [_pkg("rhel:9", "php")])
-    decisions.record(store, _php(store), "approve", "yes", "jch", "t1")
+    decisions.record(store, _php(store), "approve", "yes", "jch", "t1", leaves="a webshell")
     _nvd(store, PHP[1], "2026-10-23T00:00:00.000000Z")
     _vendor(store, PHP[1], "ubuntu", [_pkg("ubuntu:24.04", "php8.3")])
     _vendor(store, PHP[1], "redhat", [_pkg("rhel:9", "php")])
@@ -112,12 +116,14 @@ def test_kernels_and_set_asides_are_not_decided_here(store):
     _seed(store)
     kernel = next(t for t in _threats(store) if t.kind == "kernel")
     with pytest.raises(decisions.DecisionError, match="kernel"):
-        decisions.record(store, kernel, "approve", "x", "jch", "t1")
+        decisions.record(store, kernel, "approve", "x", "jch", "t1", leaves="a webshell")
 
 
 def test_reasons_lose_control_and_bidi_characters(store):
     _seed(store)
-    d = decisions.record(store, _php(store), "approve", "ok\x1b[31m ‮good", "jch", "t1")
+    d = decisions.record(
+        store, _php(store), "approve", "ok\x1b[31m ‮good", "jch", "t1", leaves="a webshell"
+    )
     assert d.reason == "ok [31m good"
 
 
@@ -160,6 +166,7 @@ class Page:
             "families": "php",
             "verdict": "approve",
             "reason": "PHP2Shell",
+            "leaves": "a webshell under the web root",
         }
         merged = {**base, **fields}
         if "signs" not in merged:  # as the page shows them now, as a browser sends them
@@ -267,24 +274,32 @@ BOTH = "&cves=CVE-2026-109618,CVE-2026-109619&families=php"
 @pytest.mark.parametrize(
     ("body", "status"),
     [
-        (f"token=x&kind=judge{BOTH}{PS}&verdict=approve&reason=r", 403),
+        (f"token=x&kind=judge{BOTH}{PS}&verdict=approve&reason=r&leaves=w", 403),
         (
             "token=T&kind=judge&cves=CVE-2026-109618&families=php&signs=nvd:CVE-2026-109618"
-            "&verdict=approve&reason=r",
+            "&verdict=approve&reason=r&leaves=w",
             409,
         ),
-        (f"token=T&kind=judge{BOTH}&signs=&verdict=approve&reason=r", 409),  # shown no signs
-        (f"token=T&kind=judge{BOTH}&signs=nvd:CVE-2026-109618&verdict=approve&reason=r", 409),
+        (
+            f"token=T&kind=judge{BOTH}&signs=&verdict=approve&reason=r&leaves=w",
+            409,
+        ),  # shown no signs
+        (
+            f"token=T&kind=judge{BOTH}&signs=nvd:CVE-2026-109618&verdict=approve&reason=r&leaves=w",
+            409,
+        ),
         (
             "token=T&kind=kernel&cves=CVE-2026-98432&families=kernel&signs=nvd:CVE-2026-98432"
-            "&verdict=approve&reason=r",
+            "&verdict=approve&reason=r&leaves=w",
             400,
         ),
-        (f"token=T&kind=judge{BOTH}{PS}&verdict=maybe&reason=r", 400),
-        (f"token=T&kind=judge{BOTH}{PS}&verdict=reject&reason=+", 400),
-        (f"token=T&kind=judge{BOTH}{PS}&verdict=approve", 400),  # no reason field at all
-        (f"token=T&kind=judge{BOTH}&verdict=approve&reason=r", 400),  # no signs field
-        (f"token=T&kind=judge{BOTH}{PS}&verdict=approve&verdict=reject&reason=r", 400),
+        (f"token=T&kind=judge{BOTH}{PS}&verdict=maybe&reason=r&leaves=w", 400),
+        (f"token=T&kind=judge{BOTH}{PS}&verdict=reject&reason=+&leaves=", 400),
+        (f"token=T&kind=judge{BOTH}{PS}&verdict=approve&leaves=w", 400),  # no reason field at all
+        (f"token=T&kind=judge{BOTH}{PS}&verdict=approve&reason=r", 400),  # no leaves field
+        (f"token=T&kind=judge{BOTH}{PS}&verdict=approve&reason=r&leaves=+", 400),  # nor an answer
+        (f"token=T&kind=judge{BOTH}&verdict=approve&reason=r&leaves=w", 400),  # no signs field
+        (f"token=T&kind=judge{BOTH}{PS}&verdict=approve&verdict=reject&reason=r&leaves=w", 400),
         ("token=T&a=1&&b", 400),
         ("token=T&reason=%ff", 400),
     ],
@@ -328,7 +343,9 @@ def test_feed_text_is_escaped(page):
     s = Store(page.site.store_path)
     _kev(s, PHP[0], "2026-10-26")
     s.db.execute("UPDATE kev SET vendor = '<script>alert(1)</script>' WHERE cve = ?", (PHP[0],))
-    decisions.record(s, _php(s), "approve", '<img src=x onerror="alert(1)">', "jch", "t1")
+    decisions.record(
+        s, _php(s), "approve", '<img src=x onerror="alert(1)">', "jch", "t1", leaves="a webshell"
+    )
     s.close()
     _, html = page.request("GET")
     assert "<script>alert" not in html and "<img src=x" not in html
@@ -368,7 +385,7 @@ def test_a_decision_made_in_another_section_asks_again(store):
 
 def test_a_decision_shown_with_other_packages_asks_again(store):
     _seed(store)
-    decisions.record(store, _php(store), "approve", "yes", "jch", "t1")
+    decisions.record(store, _php(store), "approve", "yes", "jch", "t1", leaves="a webshell")
     for cve in PHP:
         _vendor(
             store, cve, "ubuntu", [_pkg("ubuntu:24.04", "php8.3"), _pkg("ubuntu:24.04", "apache2")]
@@ -401,7 +418,7 @@ def test_a_nine_digit_cve_can_be_decided(store):
     _nvd(store, cve, "2026-10-21T00:00:00.000000Z")
     _vendor(store, cve, "ubuntu", [_pkg("ubuntu:24.04", "php8.3")])
     _vendor(store, cve, "redhat", [], found=0)
-    d = decisions.record(store, _php(store), "approve", "yes", "jch", "t1")
+    d = decisions.record(store, _php(store), "approve", "yes", "jch", "t1", leaves="a webshell")
     assert d.cves == (cve,)
 
 
@@ -549,9 +566,12 @@ def test_a_reason_with_no_box_left_is_shown_in_the_message(page):
         _vendor(s, cve, "ubuntu", [_pkg("ubuntu:24.04", "linux-aws")])
         _vendor(s, cve, "redhat", [], found=0)
     s.close()
-    response, html = page.post(page.form(reason="keep this somewhere"))
+    response, html = page.post(page.form(reason="keep this somewhere", leaves="and <this>"))
     assert response.status == 409
-    assert "here is your reason: keep this somewhere" in html
+    assert (
+        "here is your reason: keep this somewhere; and what it would leave: and &lt;this&gt;"
+        in html
+    )
 
 
 def test_a_decision_straddling_the_window_edge_stays_decided(page, capsys):
@@ -642,6 +662,23 @@ def _rated_only(store, cve, when="2026-10-20T00:00:00.000000Z", package="dotnet8
     _vendor(store, cve, "redhat", [_pkg("rhel:9", package)])
 
 
+def _by_hand(store, cve, when="2026-10-20T00:00:00.000000Z", note="heard of attacks"):
+    """Rated by Red Hat, and on the list because a person added it."""
+    _rated_only(store, cve, when)
+    store.db.execute("INSERT INTO manual (cve, added_at, note) VALUES (?, ?, ?)", (cve, when, note))
+
+
+def _old_reject(store, cves, reason="no sign of attacks"):
+    """A reject from before the scope rule, of a threat that was listed on a
+    vendor's rating alone: it kept no signs of attacks, having none."""
+    store.db.execute(
+        "INSERT INTO decision (decided_at, cves, kind, families, verdict, reason,"
+        " decided_by, signs) VALUES ('2026-11-06T00:00:00.000000Z', ?, 'judge',"
+        " '[\"dotnet\"]', 'reject', ?, 'jch', '[]')",
+        (json.dumps(sorted(cves)), reason),
+    )
+
+
 DOTNET = "CVE-2026-70188"
 
 
@@ -659,7 +696,7 @@ def _with(page, fn):
 
 def test_a_card_says_whether_it_is_attacked_and_what_it_is(page):
     def seed(s):
-        _rated_only(s, DOTNET)
+        _by_hand(s, DOTNET)
         s.db.execute(
             "UPDATE vendor_cve SET title = 'dotnet: smuggling', statement = ? WHERE cve = ?",
             ("Kestrel <script>alert(1)</script> is exposed.", DOTNET),
@@ -676,8 +713,8 @@ def test_a_card_says_whether_it_is_attacked_and_what_it_is(page):
     _with(page, seed)
     _, html = page.request("GET")
     card = _card_html(html, DOTNET)
-    assert "No sign of attacks" in card and "CISA says none (2026-10-20)" in card
-    assert "Listed on Red Hat&#39;s Critical rating alone" in card
+    assert "Added by hand" in card and "CISA says none (2026-10-20)" in card
+    assert "Added by hand: heard of attacks" in card
     assert "Red Hat: dotnet: smuggling" in card
     assert (
         "Over the network, no login, no user action (CVSS 3.1: 9.1, Microsoft&#39;s score)" in card
@@ -703,24 +740,24 @@ def test_an_approve_needs_no_reason_and_a_reject_does(page, capsys):
     assert "<td>–</td>" in html
     assert cli.main(["--home", str(page.site.home), "decisions"]) == 0
     out = capsys.readouterr().out
-    assert out.rstrip().endswith("by jch") and "no reason" not in out
+    assert out.rstrip().endswith("by jch (would leave: a webshell under the web root)")
+    assert "no reason" not in out
     assert cli.main(["--home", str(page.site.home), "candidates", "list", "--days", "60"]) == 0
-    assert "decision: approved 2026-11-07\n" in capsys.readouterr().out
+    listed = capsys.readouterr().out
+    assert "decision: approved 2026-11-07 (would leave: a webshell under the web root)\n" in listed
 
 
 def test_a_reject_comes_back_when_attacks_are_reported_after_it(page, capsys):
-    _with(page, lambda s: _rated_only(s, DOTNET))
-    body = page.form(cves=DOTNET, families="dotnet", verdict="reject", reason="no sign of attacks")
-    assert page.post(body)[0].status == 303
-    [d] = _stored(page)
-    assert d.signs == ()
+    # Rejected while a vendor's rating alone still listed it; off the list since.
+    _with(page, lambda s: (_rated_only(s, DOTNET), _old_reject(s, [DOTNET])))
     _, html = page.request("GET")
-    assert "pill-reject" in _card_html(html, DOTNET)
-    # a reason still shows, after the name
-    assert re.search(r"by jch:\s*<q>no sign of attacks</q>", _card_html(html, DOTNET))
+    assert f'id="t-{DOTNET.lower()}"' not in html
+    assert "no sign of an attack: 1 CVE(s), counted only" in html
     _with(page, lambda s: _kev(s, DOTNET, "2026-11-07"))
     _, html = page.request("GET")
     card = _card_html(html, DOTNET)
+    # a reason still shows, after the name
+    assert re.search(r"by jch:\s*<q>no sign of attacks</q>", card)
     assert "Look again" in card and "Attacks reported since:</strong> on CISA&#39;s list" in card
     assert "2 to decide" in html  # it, and PHP
     home = str(page.site.home)
@@ -736,7 +773,7 @@ def test_a_reject_comes_back_when_attacks_are_reported_after_it(page, capsys):
 
 def test_an_approve_or_a_restamped_sign_does_not_come_back(page):
     def seed(s):
-        _rated_only(s, DOTNET)
+        _by_hand(s, DOTNET)
         for cve in PHP:  # on CISA's list too, so a re-stamp doesn't move its first sign
             _kev(s, cve, "2026-10-21")
 
@@ -776,7 +813,7 @@ def test_a_reject_made_before_schema_5_is_not_brought_back(page):
 
 
 def test_an_older_reject_comes_back_after_its_window(page):
-    _with(page, lambda s: _rated_only(s, DOTNET, "2026-10-10T00:00:00.000000Z"))
+    _with(page, lambda s: _by_hand(s, DOTNET, "2026-10-10T00:00:00.000000Z"))
     page.site.days = 20
     body = page.form(cves=DOTNET, families="dotnet", verdict="reject", reason="no attacks")
     assert page.post(body)[0].status == 303
@@ -841,7 +878,7 @@ def test_web_wants_a_clone_with_an_index(tmp_path, capsys):
 
 
 def test_a_form_from_a_page_that_didnt_show_a_new_sign_is_refused(page):
-    _with(page, lambda s: _rated_only(s, DOTNET))
+    _with(page, lambda s: _by_hand(s, DOTNET))
     body = page.form(cves=DOTNET, families="dotnet", verdict="reject", reason="no attacks")
     _with(page, lambda s: _kev(s, DOTNET, "2026-11-07"))  # the hourly run, meanwhile
     response, html = page.post(body)
@@ -850,7 +887,7 @@ def test_a_form_from_a_page_that_didnt_show_a_new_sign_is_refused(page):
     assert _stored(page) == []
     body = page.form(cves=DOTNET, families="dotnet", verdict="reject", reason="still no")
     assert page.post(body)[0].status == 303
-    assert _stored(page)[0].signs == (f"kev:{DOTNET}",)
+    assert _stored(page)[0].signs == (f"kev:{DOTNET}", f"manual:{DOTNET}")
 
 
 def test_a_reject_made_knowing_of_attacks_isnt_brought_back_by_cisas_list(page):
@@ -866,7 +903,7 @@ def test_a_reject_comes_back_for_its_cve_that_had_no_sign(page):
     other = "CVE-2026-70189"
 
     def seed(s):
-        _rated_only(s, DOTNET)
+        _by_hand(s, DOTNET)  # a person's word only
         _rated_only(s, other)
         _nvd(s, other, "2026-10-20T00:00:00.000000Z")  # this one: CISA says active
 
@@ -905,7 +942,7 @@ def test_a_refused_reject_on_a_folded_card_comes_back_open_and_named(page, tmp_p
 
 def test_a_cve_that_joined_after_a_reject_isnt_an_attack_reported_since(page):
     later = "CVE-2026-70190"
-    _with(page, lambda s: _rated_only(s, DOTNET))
+    _with(page, lambda s: _by_hand(s, DOTNET))
     body = page.form(cves=DOTNET, families="dotnet", verdict="reject", reason="no attacks")
     assert page.post(body)[0].status == 303
 
@@ -939,14 +976,7 @@ def test_bidi_and_control_characters_in_fetched_text_dont_reach_the_page(page):
 
 
 def test_a_reject_added_by_hand_comes_back_when_cisa_confirms_it(page):
-    def seed(s):
-        _rated_only(s, DOTNET)
-        s.db.execute(
-            "INSERT INTO manual (cve, added_at, note) VALUES (?, ?, 'heard of attacks')",
-            (DOTNET, "2026-10-20T00:00:00.000000Z"),
-        )
-
-    _with(page, seed)
+    _with(page, lambda s: _by_hand(s, DOTNET))
     body = page.form(cves=DOTNET, families="dotnet", verdict="reject", reason="rumour only")
     assert page.post(body)[0].status == 303
     assert _stored(page)[0].signs == (f"manual:{DOTNET}",)
@@ -954,3 +984,202 @@ def test_a_reject_added_by_hand_comes_back_when_cisa_confirms_it(page):
     _, html = page.request("GET")
     card = _card_html(html, DOTNET)
     assert "Look again" in card and "Attacks reported since:</strong> on CISA&#39;s list" in card
+
+
+# the checker's scope (2026-11-10): an approve says what the attack leaves, and
+# every CVE under it has a sign of an attack
+
+
+def test_an_approve_says_what_it_would_leave_on_a_server(store):
+    _seed(store)
+    for answer in ("", "  \n ", "\x1b\x00"):
+        with pytest.raises(decisions.DecisionError, match="what the attack would leave"):
+            decisions.record(store, _php(store), "approve", "yes", "jch", "t1", leaves=answer)
+    with pytest.raises(decisions.DecisionError, match="500 at most"):
+        decisions.record(store, _php(store), "approve", "yes", "jch", "t1", leaves="x" * 501)
+    assert decisions.history(store) == []
+    longest = decisions.record(store, _php(store), "approve", "", "jch", "t0", leaves="x" * 500)
+    assert len(longest.leaves) == 500  # by the function's rule and the store's
+    # a reject needs none, and keeps none
+    d = decisions.record(store, _php(store), "reject", "no", "jch", "t1", leaves="a webshell")
+    assert d.leaves is None and decisions.history(store)[0].leaves is None
+    assert len(decisions.history(store)) == 2
+
+
+def test_the_store_itself_refuses_an_approve_out_of_scope(store):
+    insert = (
+        "INSERT INTO decision (decided_at, cves, kind, families, verdict, reason, decided_by,"
+        " signs, leaves) VALUES ('t', '[\"CVE-2026-1\"]', 'judge', '[]', ?, 'r', 'jch', ?, ?)"
+    )
+    sign = '["kev:CVE-2026-1"]'
+    for signs, leaves in (
+        (sign, None),
+        (sign, ""),
+        (sign, "  "),
+        (sign, "\n\t \r"),
+        (sign, "x" * 501),
+        (None, "a webshell"),
+        ("[]", "a webshell"),
+        ("[ ]", "a webshell"),
+        ("null", "a webshell"),
+        ("junk", "a webshell"),
+        ('{"kev:CVE-2026-1": 1}', "a webshell"),
+        ('["kev:CVE-2026-2"]', "a webshell"),  # a sign, of another CVE
+    ):
+        with pytest.raises(sqlite3.IntegrityError, match="sign of an attack and what it leaves"):
+            store.db.execute(insert, ("approve", signs, leaves))
+    two = insert.replace('["CVE-2026-1"]', '["CVE-2026-1", "CVE-2026-2"]')
+    assert two != insert
+    for cves_insert, signs in ((two, sign), (insert.replace('["CVE-2026-1"]', "[]"), sign)):
+        with pytest.raises(sqlite3.IntegrityError, match="sign of an attack and what it leaves"):
+            store.db.execute(cves_insert, ("approve", signs, "a webshell"))  # one CVE bare; none
+    store.db.execute(two, ("approve", '["kev:CVE-2026-1", "manual:CVE-2026-2"]', "a webshell"))
+    store.db.execute(insert, ("approve", sign, "x" * 500))
+    store.db.execute(insert, ("reject", "[]", None))  # a reject is held to neither
+
+
+def test_schema_8_moves_up_and_keeps_its_approves_as_they_were(tmp_path):
+    from drafter.store import _SCHEMA, _STEPS
+
+    path = tmp_path / "drafter.sqlite3"
+    db = sqlite3.connect(path)
+    db.executescript(_SCHEMA + "".join(_STEPS[n] for n in range(2, 9)) + "PRAGMA user_version = 8;")
+    db.execute(
+        "INSERT INTO decision (decided_at, cves, kind, families, verdict, reason, decided_by,"
+        " signs) VALUES ('t', '[\"CVE-2026-1\"]', 'judge', '[\"dotnet\"]', 'approve', '', 'jch',"
+        " '[]')"
+    )
+    db.commit()
+    db.close()
+    s = Store(path)
+    try:
+        assert s.migrated_from == 8
+        [d] = decisions.history(s)
+        assert (d.verdict, d.signs, d.leaves) == ("approve", (), None)
+        with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+            s.db.execute("UPDATE decision SET leaves = 'x'")
+    finally:
+        s.close()
+
+
+RATED = "CVE-2026-109700"  # php too, Red Hat Critical, and nobody attacking it
+
+
+def _approved_with_a_rated_cve(store):
+    """As ruby stood on 2026-11-10: approved while a vendor's rating still listed
+    a CVE, so the approve covers one with no sign of an attack."""
+    from tests.test_candidates import _rh
+
+    _rh(store, RATED)
+    store.db.execute("DROP TRIGGER decision_approve_in_scope")  # made before schema 9
+    store.db.execute(
+        "INSERT INTO decision (decided_at, cves, kind, families, verdict, reason, decided_by,"
+        " signs) VALUES ('2026-11-06T00:00:00.000000Z', ?, 'judge', '[\"php\"]', 'approve',"
+        " '', 'jch', ?)",
+        (json.dumps(sorted([*PHP, RATED])), json.dumps([f"nvd:{cve}" for cve in PHP])),
+    )
+
+
+def test_an_approve_covering_a_cve_nobody_attacks_asks_for_a_look_again(page, capsys):
+    _with(page, _approved_with_a_rated_cve)
+    _, html = page.request("GET")
+    card = _card_html(html, PHP[0])
+    assert f'name="cves" value="{",".join(PHP)}"' in card  # the rated CVE isn't listed
+    assert "Look again" in card
+    assert f"Approved with no sign of an attack on:</strong> {RATED}" in card
+    assert "1 to decide" in html
+    assert cli.main(["--home", str(page.site.home), "candidates", "list", "--days", "60"]) == 0
+    assert f"it covered {RATED}, which had no sign of an attack then" in capsys.readouterr().out
+    # it stays past its window (off the page it could be neither drafted nor settled)
+    page.site.days = 5
+    _, html = page.request("GET")
+    card = _card_html(html, PHP[0])
+    assert "Before the 5 days" in card and "Look again" in card
+    assert "and 1 older still to decide" in html
+    # deciding again covers the attacked CVEs alone, and settles it
+    assert page.post(page.form())[0].status == 303
+    assert _stored(page)[0].cves == PHP
+    _, html = page.request("GET")
+    assert f'id="t-{PHP[0].lower()}"' not in html  # settled, and out of the 5 days
+    page.site.days = 30
+    _, html = page.request("GET")
+    card = _card_html(html, PHP[0])
+    assert "pill-approve" in card and "Look again" not in card
+
+
+def test_an_old_reject_covering_a_cve_nobody_attacks_stays_settled(page):
+    def seed(s):
+        from tests.test_candidates import _rh
+
+        _rh(s, RATED)
+        s.db.execute(
+            "INSERT INTO decision (decided_at, cves, kind, families, verdict, reason,"
+            " decided_by, signs) VALUES ('2026-11-06T00:00:00.000000Z', ?, 'judge',"
+            " '[\"php\"]', 'reject', 'GitLab, not PHP', 'jch', ?)",
+            (json.dumps(sorted([*PHP, RATED])), json.dumps([f"nvd:{cve}" for cve in PHP])),
+        )
+
+    _with(page, seed)
+    _, html = page.request("GET")
+    card = _card_html(html, PHP[0])
+    assert "pill-reject" in card and "Look again" not in card
+
+
+def test_the_cli_refuses_such_an_approve_before_anything_is_fetched_or_sent(
+    page, capsys, monkeypatch
+):
+    from drafter import draft
+
+    _with(page, _approved_with_a_rated_cve)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    monkeypatch.setattr(draft, "sources", lambda *a, **kw: pytest.fail("sources were read"))
+    home = ["--home", str(page.site.home)]
+    for extra in (["--dry-run"], []):
+        assert cli.main([*home, "draft", *PHP, RATED, *extra]) == 1
+        assert f"no sign of an attack on {RATED}" in capsys.readouterr().err
+    s = Store(page.site.store_path, read_only=True)
+    try:
+        assert draft.ledger(s) == []
+    finally:
+        s.close()
+
+
+def test_nothing_is_drafted_from_an_approve_that_covers_a_cve_nobody_attacks(store):
+    from drafter import draft
+
+    _seed(store)
+    _approved_with_a_rated_cve(store)
+    old = draft.approved(store, [*PHP, RATED])  # it is still the approve on record
+    with pytest.raises(draft.DraftError, match=f"no sign of an attack on {RATED}"):
+        draft.in_scope(old)
+    with pytest.raises(draft.DraftError, match="no sign of an attack"):
+        draft.draft(store, [*PHP, RATED], None)
+
+
+def test_an_approve_can_no_longer_be_made_on_a_cve_nobody_attacks(store):
+    _seed(store)
+    php = _php(store)
+    rated = c.Candidate(RATED, [c.Signal("redhat", "2026-10-21T00:00:00.000000Z")], "judge")
+    both = c.Threat("judge", php.families, [*php.candidates, rated])
+    with pytest.raises(decisions.DecisionError, match=f"no sign of an attack on {RATED}"):
+        decisions.record(store, both, "approve", "", "jch", "t1", leaves="a webshell")
+    decisions.record(store, both, "reject", "one of them isn't attacked", "jch", "t1")
+
+
+def test_the_form_asks_what_it_would_leave_and_the_page_shows_the_answer(page):
+    response, html = page.post(page.form(leaves="  ", reason="looks bad"))
+    assert response.status == 400 and "say what the attack would leave on a server" in html
+    assert "looks bad</textarea>" in html and _stored(page) == []
+    _, html = page.request("GET")
+    assert "What would it leave on a server? (needed to approve" in _card_html(html, PHP[0])
+    answer = 'webshells in the web root; <b>php-fpm</b> spawning "sh"'
+    assert page.post(page.form(leaves=answer, reason=""))[0].status == 303
+    assert _stored(page)[0].leaves == answer
+    _, html = page.request("GET")
+    card = _card_html(html, PHP[0])
+    assert "Would leave on a server:</strong> webshells in the web root; &lt;b&gt;php-fpm" in card
+    assert "<b>php-fpm" not in html
+    assert html.count("webshells in the web root") == 2  # the card, and the history
+    # a refused reject keeps the answer typed beside it
+    response, html = page.post(page.form(verdict="reject", reason="", leaves="kept answer"))
+    assert response.status == 400 and "kept answer</textarea>" in html

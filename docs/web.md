@@ -14,34 +14,40 @@ signature), and a rejection says why not.
 Each card asks one question: would someone running Compromise Checker want a
 pack for this? **Approve** when all of these hold:
 
-- it's **exploited**: on CISA's list, or CISA says active;
+- it's **exploited**: on CISA's list, or CISA says active (only these, and a
+  person's own report with its source, put a threat on the page at all);
+- it **leaves signs on a server** that the checker could look for: files, log
+  lines, processes, accounts, changed settings. The form asks for them in a line,
+  and an approve isn't recorded without it. If the honest answer is "nothing",
+  reject: the checker answers "was this server broken into?", and a pack with
+  nothing to look for can only say a server was open to something;
 - the attacked code is **in the packages listed**, not only in a product built on
   them (GitLab on Ruby, say);
 - someone can **reach it on a server** the tool checks, from the network or with a
   login an attacker could plausibly get;
 - no signed pack **covers it** already.
 
-**Reject** otherwise, and say which test failed: "no sign of attacks", "GitLab,
-not Ruby", "not a vulnerability (trust-store update)", "firmware, network boot
-only". Whether a fix exists isn't one of the tests: a pack for an attacked threat
-with no fix still tells an admin they're exposed.
+**Reject** otherwise, and say which test failed: "leaves nothing on a server",
+"GitLab, not Ruby", "firmware, network boot only". Whether a fix exists isn't one
+of the tests: an attacked threat with no fix is when knowing what to look for
+matters most.
 
 ## What each card says
 
 For the two sections a person decides, from data the drafter already fetched
 (nothing is fetched for the page, and nothing is summarised):
 
-- **Attacks:** *Exploited* (on CISA's list, or CISA says active), *Added by hand*
-  (with the note), or *No sign of attacks*, with CISA's own word for each CVE,
-  "none" included, and the vendor rating that listed it otherwise.
+- **Attacks:** *Exploited* (on CISA's list, or CISA says active) or *Added by hand*
+  (with the note), with CISA's own word for each CVE, "none" included.
 - **What:** one line per CVE, CISA's name for it, else Red Hat's bug title.
 - **Reach:** the CVSS vector in words (where from, what login, whether a user must
   act, hard to pull off, only under certain conditions), naming whose score it is:
   a score can belong to a product built on the package (GitLab's 10.0 on a Ruby
   card). NVD's own CVSS 3.1 first, then the reporting organisation's, then 3.0 the
   same way, then 4.0; CISA's scores added to others' CVEs come after all of those.
-- **Ratings:** Red Hat's and Ubuntu's own, which put a CVE on the list (plan D3)
-  but aren't evidence of attacks.
+- **Ratings:** Red Hat's and Ubuntu's own. They aren't evidence of attacks, and a
+  rating alone no longer puts a CVE on the page: those are counted in one line
+  under "Not threats here yet" ([candidates.md](candidates.md)).
 - **Fix:** the Packages line in one: fixed everywhere, nowhere, or which aren't.
 - **What NVD and Red Hat say:** behind a fold, NVD's description and Red Hat's
   statement, each cut to about 600 characters, with a link to the whole record.
@@ -70,7 +76,7 @@ judge** and **Third-party builds** with a form each; **Kernels** (a notice only,
 plan D2) and **Set aside** (changed in `setaside.toml`, not here) without one.
 Below them, the CVEs that aren't threats here yet, and every decision made.
 
-The window goes by each CVE's first sign, as the list's does. A threat no one has
+The window goes by each CVE's first sign of an attack, as the list's does. A threat no one has
 decided stays on the page after its first sign leaves the window, marked "Before
 the 30 days", until someone decides it. The page reads back 180 days (as far as
 `candidates refresh` keeps vendor records current), and never before 2026-10-08,
@@ -92,6 +98,20 @@ window, 30 days by default).
 - **A reason to reject**, one line, at most 1,000 characters. An approve may go
   without one (A.4b): it rests on what the card showed, and a reject is the
   decision someone will ask about later. The store holds the rule too.
+- **What it would leave on a server, to approve** (2026-11-10), one line, at most
+  500 characters, kept with the decision and shown on the card, in the history
+  and by `drafter decisions`. A reject needs none and keeps none. And every CVE
+  under an approve has a sign of an attack. The store holds both rules itself (a
+  trigger, CVE by CVE), so nothing that writes to it can approve without them. Approves made
+  before the rule have no answer and stay as they are.
+- **An approve from before the rule that covered a CVE with no sign of an attack**
+  reads **Look again**, naming the CVE (Ruby's, made on 2026-11-08 with a CVE that
+  only Red Hat's rating had listed). It stays on the page, past the 30 days, until
+  it is decided again; deciding again covers the attacked CVEs alone.
+  `drafter draft`, `drafter pack template` and `drafter pack write` refuse to work
+  from such an approve, so the threats approved on a rating alone (.NET and
+  ca-certificates; Java and edk2 were rejected since) get no new draft or pack
+  version. The packs already published are not touched.
 - **Append-only.** A decision is never changed or removed (the store refuses
   both). Deciding again adds a new decision that stands in front of the old one;
   both stay in the record.

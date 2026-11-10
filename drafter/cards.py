@@ -123,6 +123,8 @@ def attacks(threat: Threat, known: dict[str, Facts]) -> dict:
     if any(s.kind == "manual" for c in threat.candidates for s in c.signals):
         notes = "; ".join(dict.fromkeys(by_hand)) or "no note"
         return {"word": "hand", "text": f"{text}. Added by hand: {notes}"}
+    # Not reached from the page since 2026-11-10 (a rating alone lists nothing):
+    # kept so a threat built some other way still says what it rests on.
     kinds = sorted(
         {s.kind for c in threat.candidates for s in c.signals if s.kind in VENDOR_SIGNALS}
     )

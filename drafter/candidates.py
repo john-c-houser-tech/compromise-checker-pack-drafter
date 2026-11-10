@@ -1,15 +1,20 @@
 """A.2: which exploited threats touch packages Compromise Checker can judge.
 
-A CVE is signalled (plan D3) when it is on CISA's list, rated "exploitation:
-active" by CISA in NVD, rated critical by Ubuntu or Critical by Red Hat, or added
-by hand. For each signalled CVE the drafter fetches Ubuntu's OSV record and Red
-Hat's record once, and keeps them. A candidate is then sorted:
+A CVE comes onto the list by a sign that someone is attacking it: it is on CISA's
+list, rated "exploitation: active" by CISA in NVD, or added by hand with a note of
+where that came from. Ubuntu's critical priority and Red Hat's Critical severity
+are shown on such a CVE, but a rating alone puts nothing on the list (the checker's
+scope, 2026-11-10: packs are for attacks seen in the wild): those CVEs are counted,
+and that is all (Ubuntu's record is read once for one, to date its rating). For
+each CVE on the list the drafter fetches Ubuntu's OSV record
+and Red Hat's record once, and keeps them. A candidate is then sorted:
 
 - judge: a package on a supported release (Ubuntu 22.04 and later, RHEL 9 and 10,
   which covers Rocky Linux and AlmaLinux) that isn't set aside;
 - kernel: only kernels, which the tool can't judge until its Phase 6 (D2);
 - set aside: only packages or products named in `setaside.toml`, with its reason;
-- elsewhere: no package on a supported release (counted, not listed).
+- elsewhere: no package on a supported release (counted, not listed);
+- rated: a vendor's rating and no sign of an attack (counted, not listed).
 
 CVEs that hit the same package family within 14 days are one threat.
 """
@@ -167,11 +172,24 @@ class Signal:
         return f"{text} ({self.note})" if self.note else text
 
 
+def first_sign(sigs: list[Signal]) -> str:
+    """When a CVE first counted (`sigs` oldest first): its first sign of an attack,
+    or, for one that has only a vendor's rating, the rating."""
+    return next((s.when for s in sigs if s.kind in ATTACK_SIGNALS), sigs[0].when)
+
+
+def attacked(sigs: list[Signal]) -> bool:
+    return any(s.kind in ATTACK_SIGNALS for s in sigs)
+
+
 def signals(store: Store, since: str) -> dict[str, list[Signal]]:
     """Every CVE first signalled on or after `since`, with all its signals, oldest
     first. Signals are gathered over the whole history and the window applies to
-    the first one: CISA re-stamps old SSVC ratings in batches, and a CVE on its list
-    since 2022 must not come back as a new threat."""
+    the first sign of an attack: CISA re-stamps old SSVC ratings in batches, and a
+    CVE on its list since 2022 must not come back as a new threat. A vendor's
+    rating doesn't start the clock, so a CVE rated long ago and attacked now is
+    new now. One with a rating and no sign of an attack is here too (by its first
+    rating), for the count of what the list leaves out."""
     found: dict[str, list[Signal]] = {}
 
     def add(cve: str, kind: str, when: str | None, note: str = "") -> None:
@@ -204,7 +222,7 @@ def signals(store: Store, since: str) -> dict[str, list[Signal]]:
     out = {}
     for cve, sigs in found.items():
         sigs.sort(key=lambda s: s.when)
-        if sigs[0].when >= since:
+        if first_sign(sigs) >= since:
             out[cve] = sigs
     return out
 
@@ -396,7 +414,20 @@ def refresh(ctx: Context, since: str, *, limit: int = 5000) -> Refresh:
     }
     todo = []
     for cve, sigs in signals(store, since).items():
-        first = timeutil.parse(sigs[0].when)
+        if not attacked(sigs):
+            # A rating alone: counted, never listed, so its records aren't read. But
+            # Ubuntu's rating is dated by Ubuntu's own record (the feed has only when
+            # the record last changed), so that one is read, once: without it, every
+            # old critical CVE whose record changes would be counted as rated today.
+            attempted, checked = known.get((cve, "ubuntu"), (None, None))
+            failed = attempted is not None and (checked is None or checked < attempted)
+            if any(s.kind == "ubuntu" for s in sigs) and (
+                attempted is None
+                or (failed and now - timeutil.parse(attempted) >= RETRY_FAILED_AFTER)
+            ):
+                todo.append((attempted is not None, attempted or "", cve, "ubuntu"))
+            continue
+        first = timeutil.parse(first_sign(sigs))
         newest = sigs[-1].when
         every = dt.timedelta(days=1) if now - first <= RECENT else dt.timedelta(days=7)
         for vendor in ("ubuntu", "redhat"):
@@ -575,7 +606,7 @@ def package_family(name: str) -> str:
 class Candidate:
     cve: str
     signals: list[Signal]
-    kind: str  # judge, thirdparty, kernel, setaside, unnamed, elsewhere, unread
+    kind: str  # judge, thirdparty, kernel, setaside, unnamed, elsewhere, unread, rated
     packages: list[dict] = field(default_factory=list)  # on supported releases
     reasons: list[str] = field(default_factory=list)
     products: list[str] = field(default_factory=list)  # NVD's vendor:product names
@@ -586,7 +617,7 @@ class Candidate:
 
     @property
     def first(self) -> str:
-        return self.signals[0].when
+        return first_sign(self.signals)
 
     @property
     def families(self) -> list[str]:
@@ -603,6 +634,10 @@ class Candidate:
 
 
 UNNAMED_FOR = dt.timedelta(days=30)
+RATED_LINE = (
+    "Rated critical by a vendor, no sign of an attack: {n} CVE(s), counted only"
+    " (packs are for attacks seen in the wild)"
+)
 
 
 def classify(
@@ -615,7 +650,8 @@ def classify(
     now = now or timeutil.now()
     rules = load_setaside() if rules is None else rules
     watch = load_watch() if watch is None else watch
-    sorted_out = _classify(store, since, rules)
+    everything = _classify(store, since, rules)
+    sorted_out = [cand for cand in everything if cand.kind != "rated"]
     # Only the signalled CVEs' NVD rows, in batches: the table holds every CVE NVD
     # changed in the window (409,618 for 180 days).
     products, texts, kev_names = {}, {}, {}
@@ -642,20 +678,16 @@ def classify(
         cand.watched, cand.watched_via, cand.rebuilt_by = _watched(
             cand.products, texts.get(cand.cve), watch, cand.kev_name
         )
-        # A third-party build is judged on CISA's word or a person's, not on Ubuntu's
-        # or Red Hat's rating of their own packages (D3's vendor scope).
-        independent = any(sig.kind not in VENDOR_SIGNALS for sig in cand.signals)
-        if cand.kind == "elsewhere" and cand.watched and independent:
+        if cand.kind == "elsewhere" and cand.watched:
             cand.kind = "thirdparty"
         elif (
             cand.kind == "elsewhere"
-            and independent
             and not cand.products
             and now - timeutil.parse(cand.first) <= UNNAMED_FOR
         ):
             # Not ruled out: NVD often names the products days after a CVE appears.
             cand.kind = "unnamed"
-    return sorted_out
+    return everything
 
 
 def _classify(store: Store, since: str, rules: list[SetAside]) -> list[Candidate]:
@@ -667,6 +699,9 @@ def _classify(store: Store, since: str, rules: list[SetAside]) -> list[Candidate
     out = []
     signals_all = signals(store, since)
     for cve, sigs in signals_all.items():
+        if not attacked(sigs):
+            out.append(Candidate(cve, sigs, "rated"))
+            continue
         vendors = records.get(cve, {})
         if len(vendors) < 2:
             out.append(Candidate(cve, sigs, "unread"))
@@ -682,14 +717,10 @@ def _classify(store: Store, since: str, rules: list[SetAside]) -> list[Candidate
         # A vendor's own severity speaks for its own packages only: Red Hat rating a
         # CVE Critical says nothing about an Ubuntu universe package (D3).
         sigs = [s for s in sigs if s.kind not in VENDOR_SIGNALS or by_vendor.get(s.kind)]
-        if not sigs or not by_vendor:
-            out.append(Candidate(cve, sigs or signals_all[cve], "elsewhere"))
+        if not by_vendor:
+            out.append(Candidate(cve, sigs, "elsewhere"))
             continue
-        if all(s.kind in VENDOR_SIGNALS for s in sigs):
-            rating_vendors = {sig.kind for sig in sigs}
-            packages = [p for vendor in rating_vendors for p in by_vendor[vendor]]
-        else:
-            packages = [p for vendor_packages in by_vendor.values() for p in vendor_packages]
+        packages = [p for vendor_packages in by_vendor.values() for p in vendor_packages]
         if any(not p["kernel"] and not p["set_aside"] for p in packages):
             kind = "judge"
         elif any(p["kernel"] and not p["set_aside"] for p in packages):
@@ -716,7 +747,7 @@ def threats(candidates: list[Candidate]) -> list[Threat]:
     """CVEs of one kind that hit the same package families within 14 days."""
     groups: list[Threat] = []
     for c in candidates:
-        if c.kind in ("elsewhere", "unread", "unnamed"):
+        if c.kind in ("elsewhere", "unread", "unnamed", "rated"):
             continue
         families = c.families
         for group in groups:
@@ -840,6 +871,9 @@ def render(
         lines.append(
             f"Not on a supported release: {elsewhere} CVE(s), counted only (--all lists them)"
         )
+    rated = sum(1 for c in candidates if c.kind == "rated")
+    if rated:
+        lines.append(RATED_LINE.format(n=rated))
     if unread:
         lines.append(
             f"Vendor records not read yet: {len(unread)} CVE(s); `drafter candidates refresh`"

@@ -170,7 +170,7 @@ def test_a_reference_on_an_unusual_site_is_marked():
 
 def test_the_signer_sees_the_list_at_the_top_of_the_draft(store):
     _cve(store, CVE, statement="Restart with: systemctl restart nginx.")
-    decisions.record(store, _threat(store), "approve", "", "jch", "t1")
+    decisions.record(store, _threat(store), "approve", "", "jch", "t1", leaves="a webshell")
     answer = _answer(remediation=["Update, then run systemctl restart nginx."])
     made = draft.draft(
         store, [CVE], Provider(lambda body: message(body, answer)).client(), now=lambda: NOW
@@ -208,7 +208,7 @@ def _plant(store, feed):
         store.db.execute(
             "UPDATE vendor_cve SET fetch_id = ? WHERE cve = ? AND vendor = 'ubuntu'", (fid, CVE)
         )
-    decisions.record(store, _threat(store), "approve", "", "jch", "t1")
+    decisions.record(store, _threat(store), "approve", "", "jch", "t1", leaves="a webshell")
 
 
 @pytest.mark.parametrize("feed", ["nvd", "kev", "redhat", "ubuntu"])
@@ -293,7 +293,7 @@ def test_a_command_is_found_in_a_source_whatever_its_case_and_spacing():
 
 def test_a_long_unknown_wraps_under_its_own_bullet(store):
     _cve(store, CVE)
-    decisions.record(store, _threat(store), "approve", "", "jch", "t1")
+    decisions.record(store, _threat(store), "approve", "", "jch", "t1", leaves="a webshell")
     long = "word " * 40
     answer = _answer(unknowns=[long.strip(), "second"])
     made = draft.draft(

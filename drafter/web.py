@@ -52,7 +52,7 @@ log = logging.getLogger(__name__)
 
 DEFAULT_PORT = 8089
 DEFAULT_ORIGIN = "https://packs.localhost:8443"
-MAX_BODY = 8 * 1024
+MAX_BODY = 16 * 1024  # a reason and an answer at their longest, in any script
 # How far back the page reads, so a threat still to decide stays on it after its
 # last sign is older than --days: as far back as `candidates refresh` keeps vendor
 # records current (its default window).
@@ -199,7 +199,7 @@ def view(site: Site, store: Store) -> dict:
     # CVE ever decided is settled once it leaves the window, so ageing alone never
     # reopens a decision.
     # A reject that has had a sign of attacks since comes back too (A.4b), whatever
-    # its age.
+    # its age; and an approve that covers a CVE approved with no sign of an attack.
     in_window = {c.cve for c in found}
     wide = timeutil.fmt(max(now - max(OPEN_FOR, dt.timedelta(days=site.days)), OPEN_SINCE))
     before = [
@@ -209,6 +209,10 @@ def view(site: Site, store: Store) -> dict:
         and (
             c.cve not in by_cve
             or decisions.attacked_since(by_cve[c.cve], candidates.Threat(c.kind, [], [c]))
+            # An approve from before the scope rule that asks for a look again
+            # stays until it is decided again: off the page it could be neither
+            # drafted from nor settled.
+            or decisions.unattacked_under(by_cve[c.cve])
         )
     ]
     earlier = [g for g in candidates.threats(before) if g.kind in decisions.DECIDABLE]
@@ -252,6 +256,7 @@ def view(site: Site, store: Store) -> dict:
         "sections": sections,
         "unnamed": [c for c in found if c.kind == "unnamed"],
         "elsewhere": sum(1 for c in found if c.kind == "elsewhere"),
+        "rated": sum(1 for c in found if c.kind == "rated"),
         "unread": [c.cve for c in found if c.kind == "unread"],
         "older": sum(
             1 for s in sections for card in s["cards"] if card["older"] and not card["covered"]
@@ -346,7 +351,7 @@ def page(site: Site, data: dict, *, error: str | None = None, kept: dict | None 
         **{k: v for k, v in data.items() if k not in ("groups", "shown")},
         token=site.token,
         error=error,
-        kept={"anchor": "", "reason": "", **(kept or {})},
+        kept={"anchor": "", "reason": "", "leaves": "", **(kept or {})},
         version=__version__,
     )
 
@@ -516,6 +521,7 @@ class Handler(BaseHTTPRequestHandler):
             "signs",
             "verdict",
             "reason",
+            "leaves",
         } <= set(fields):
             self._text(HTTPStatus.BAD_REQUEST, "the form is missing a field")
             return
@@ -547,7 +553,11 @@ class Handler(BaseHTTPRequestHandler):
             families = [f for f in fields["families"].split(",") if f]
             threat = find(data["groups"], fields["kind"], cves, families, fields["signs"])
             # Back in the box of a threat that has one, whatever happened to the CVEs.
-            kept = {"anchor": nearest(data["shown"], cves), "reason": fields["reason"]}
+            kept = {
+                "anchor": nearest(data["shown"], cves),
+                "reason": fields["reason"],
+                "leaves": fields["leaves"],
+            }
             if threat is None:
                 self._html(
                     HTTPStatus.CONFLICT,
@@ -558,10 +568,15 @@ class Handler(BaseHTTPRequestHandler):
                         " left it, its packages changed, it moved section, or attacks were"
                         " reported). Look at it again below; "
                         + (
-                            "your reason is kept in its box."
+                            "what you wrote is kept in its boxes."
                             if kept["anchor"]
                             else "it has no form now, so here is your reason: "
                             + _quoted(fields["reason"])
+                            + (
+                                "; and what it would leave: " + _quoted(fields["leaves"])
+                                if fields["leaves"].strip()
+                                else ""
+                            )
                         ),
                         kept=kept,
                     ),
@@ -575,6 +590,7 @@ class Handler(BaseHTTPRequestHandler):
                     fields["reason"],
                     self.site.by,
                     timeutil.fmt(self.site.now()),
+                    leaves=fields["leaves"],
                 )
             except decisions.DecisionError as exc:
                 name = ", ".join(threat.families) or "?"

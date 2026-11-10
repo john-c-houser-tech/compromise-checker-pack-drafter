@@ -97,7 +97,9 @@ def _threat(store, cve=CVE):
 @pytest.fixture
 def approved_store(store):
     _cve(store, CVE)
-    decisions.record(store, _threat(store), "approve", "", "jch", "2026-11-08T18:53:00Z")
+    decisions.record(
+        store, _threat(store), "approve", "", "jch", "2026-11-08T18:53:00Z", leaves="a webshell"
+    )
     return store
 
 
@@ -230,7 +232,7 @@ def test_only_an_approved_threat_is_drafted(store):
 def test_a_threat_is_drafted_whole_as_approved(store):
     _cve(store, CVE)
     _cve(store, "CVE-2026-111498")
-    decisions.record(store, _threat(store), "approve", "", "jch", "t1")
+    decisions.record(store, _threat(store), "approve", "", "jch", "t1", leaves="a webshell")
     with pytest.raises(draft.DraftError, match="draft that threat whole"):
         draft.draft(store, [CVE], Provider().client())
 
@@ -482,7 +484,7 @@ def test_hidden_characters_in_the_unknowns_dont_reach_the_file(approved_store):
 def test_the_cli_dry_run_sends_nothing(tmp_path, capsys, monkeypatch):
     s = Store(tmp_path / "drafter.sqlite3")
     _cve(s, CVE)
-    decisions.record(s, _threat(s), "approve", "", "jch", "t1")
+    decisions.record(s, _threat(s), "approve", "", "jch", "t1", leaves="a webshell")
     s.close()
 
     def nowhere(*a, **k):
@@ -499,7 +501,7 @@ def test_the_cli_dry_run_sends_nothing(tmp_path, capsys, monkeypatch):
 def test_the_cli_drafts_and_writes_the_file(tmp_path, capsys, monkeypatch):
     s = Store(tmp_path / "drafter.sqlite3")
     _cve(s, CVE, packages=("brotli", "dotnet8.0"))
-    decisions.record(s, _threat(s), "approve", "", "jch", "t1")
+    decisions.record(s, _threat(s), "approve", "", "jch", "t1", leaves="a webshell")
     s.close()
     p = Provider(lambda body: message(body, _answer(remediation=["Update dotnet8.0."])),
                  lambda body: message(body))  # fmt: skip
@@ -580,7 +582,13 @@ def test_cves_decided_apart_are_drafted_apart(store):
     threat = _threat(store)
     for cand in threat.candidates:
         decisions.record(
-            store, c.Threat("judge", threat.families, [cand]), "approve", "", "jch", "t"
+            store,
+            c.Threat("judge", threat.families, [cand]),
+            "approve",
+            "",
+            "jch",
+            "t",
+            leaves="a webshell",
         )
     with pytest.raises(draft.DraftError, match="decided apart"):
         draft.draft(store, [CVE, "CVE-2026-111498"], Provider().client())
@@ -723,7 +731,7 @@ def test_a_second_try_counts_the_first_answers_thinking(approved_store, monkeypa
 def test_no_api_key_is_found_before_anything_is_recorded(tmp_path, capsys, monkeypatch):
     s = Store(tmp_path / "drafter.sqlite3")
     _cve(s, CVE)
-    decisions.record(s, _threat(s), "approve", "", "jch", "t1")
+    decisions.record(s, _threat(s), "approve", "", "jch", "t1", leaves="a webshell")
     s.close()
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     assert cli.main(["--home", str(tmp_path), "draft", CVE]) == 2
@@ -832,7 +840,7 @@ def test_every_event_type_offered_is_one_the_checker_writes():
 def test_a_dry_run_says_when_a_real_run_would_stop(tmp_path, capsys):
     s = Store(tmp_path / "drafter.sqlite3")
     _cve(s, CVE)
-    decisions.record(s, _threat(s), "approve", "", "jch", "t1")
+    decisions.record(s, _threat(s), "approve", "", "jch", "t1", leaves="a webshell")
     _spend(s, 4.95)
     s.close()
     assert cli.main(["--home", str(tmp_path), "draft", CVE, "--dry-run"]) == 1
@@ -842,7 +850,7 @@ def test_a_dry_run_says_when_a_real_run_would_stop(tmp_path, capsys):
 def test_a_draft_isnt_turned_away_by_the_hourly_runs_lock(tmp_path, monkeypatch):
     s = Store(tmp_path / "drafter.sqlite3")
     _cve(s, CVE)
-    decisions.record(s, _threat(s), "approve", "", "jch", "t1")
+    decisions.record(s, _threat(s), "approve", "", "jch", "t1", leaves="a webshell")
     s.close()
     held = cli._lock(tmp_path)  # the hourly run, mid-fetch
     try:
@@ -935,3 +943,22 @@ def test_out_must_be_a_writable_file(tmp_path, capsys, monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", KEY)
     assert cli.main(["--home", str(tmp_path), "draft", CVE, "--out", str(tmp_path)]) == 2
     assert "can't write a file" in capsys.readouterr().err
+
+
+# the checker's scope (2026-11-10)
+
+
+def test_a_draft_with_no_detections_says_a_pack_cant_be_written(tmp_path, monkeypatch, capsys):
+    s = Store(tmp_path / "drafter.sqlite3")
+    _cve(s, CVE)
+    decisions.record(s, _threat(s), "approve", "", "jch", "t1", leaves="a crash in the journal")
+    s.close()
+    monkeypatch.setenv("ANTHROPIC_API_KEY", KEY)
+    out = tmp_path / "d"
+    bare = {**GOOD, "detections_yaml": "[]", "weights": []}
+    # made before Anthropic is stood in for, which Provider's own client needs real
+    clients = [Provider(lambda body, a=a: message(body, a)).client() for a in (GOOD, bare)]
+    monkeypatch.setattr(anthropic, "Anthropic", lambda **kw: clients.pop(0))
+    for noted in (False, True):
+        assert cli.main(["--home", str(tmp_path), "draft", CVE, "--out", str(out)]) == 0
+        assert ("NO DETECTIONS" in capsys.readouterr().err) is noted
