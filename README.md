@@ -12,6 +12,10 @@ for a pack only if it is being exploited **and** leaves signs on a server that t
 checker can see, so the pack carries detections; a flaw that fails either is
 rejected, however serious
 ([which threats get a pack](https://github.com/john-c-houser-tech/compromise-checker/blob/main/docs/packs.md#which-threats-get-a-pack)).
+The drafter holds that rule itself, in three places: only a sign of an attack puts
+a CVE on the list (a vendor's "critical" alone is counted, not listed); an approve
+must say what the attack would leave on a server; and a pack with no detections is
+never written.
 
 The drafter reads only public data. It holds no signing key, no GitHub token and
 no evidence from anyone's machines, so it can't publish anything by itself.

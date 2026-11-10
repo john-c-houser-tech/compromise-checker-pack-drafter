@@ -11,6 +11,10 @@ a person reviews and signs everything it writes.
     drafter spend                                # every request sent, and the caps
 
 Give the CVEs of one approve, all of them: a threat is drafted as it was approved.
+An approve made before 2026-11-10 that covers a CVE with no sign of an attack is
+refused before anything is sent ([web.md](web.md), Decisions). A draft the AI
+returns with no detections is still written, since it has been paid for, with a
+NO DETECTIONS note: `drafter pack write` won't make a pack from it as it stands.
 Without `ANTHROPIC_API_KEY` set, nothing is sent or recorded. A draft doesn't take
 the hourly run's lock (and leaves a fill owed after a schema move to the hourly run
 and the page): it writes only its spending rows, each with the caps checked

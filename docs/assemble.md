@@ -98,7 +98,12 @@ Ubuntu's .NET, 50.
    draft, not one marked NOT USABLE, holding just the five parts, readable as the
    checker reads a pack (no aliases, no deep nesting).
 2. Checks the threat is still approved, and under the same decision the draft was
-   made under (decided again since: draft it again); and the version: 1 for a pack
+   made under (decided again since: draft it again); that the approve is in the
+   checker's scope (every CVE under it had a sign of an attack); that **the draft
+   has at least one detection** (a pack with nothing to look for is never written,
+   and there is no override: add a detection the sources support, or reject the
+   threat; `drafter pack template` refuses the same two, so it stops early); and
+   the version: 1 for a pack
    the clone's index doesn't list, else the listed one plus one; a pack folder the
    index doesn't list, or an id the index lists as withdrawn, is refused. The clone
    must be on `dev` with nothing uncommitted, and not behind GitHub's `dev` (a read-only
