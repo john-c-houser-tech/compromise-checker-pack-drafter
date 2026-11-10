@@ -541,7 +541,7 @@ def _draft_dry(store: Store, args) -> int:
     if cves is None:
         return 2
     try:
-        decision = draft.approved(store, cves)
+        decision = draft.in_scope(draft.approved(store, cves))
     except draft.DraftError as exc:
         print(safe(exc), file=sys.stderr)
         return 1
@@ -630,7 +630,7 @@ def _draft(store: Store, args, cves: list[str]) -> int:
 
     client = anthropic.Anthropic(max_retries=0)
     try:
-        decision = draft.approved(store, cves)
+        decision = draft.in_scope(draft.approved(store, cves))
         found = draft.sources(store, list(decision.cves))
         by_hand = draft.added_sources(store, decision.id)
         reserved = sum(len(s.text) for s in by_hand)
@@ -662,6 +662,13 @@ def _draft(store: Store, args, cves: list[str]) -> int:
     if not made.ok:
         print("NOT USABLE: the answer was refused (the reasons are in the draft)", file=sys.stderr)
         return 1
+    if not made.checked.detections:
+        print(
+            "NO DETECTIONS: the sources gave the AI nothing for the checker to look for."
+            " `drafter pack write` refuses a pack without one: add a detection the sources"
+            " support, or reject the threat on the page.",
+            file=sys.stderr,
+        )
     return 0
 
 
@@ -802,7 +809,9 @@ def _decisions(store: Store) -> int:
         print(
             safe(
                 f"{d.decided_at[:16].replace('T', ' ')}  {verdict}  {', '.join(d.families) or '?'}"
-                f"  {', '.join(d.cves)}  by {d.decided_by}" + (f": {d.reason}" if d.reason else "")
+                f"  {', '.join(d.cves)}  by {d.decided_by}"
+                + (f": {d.reason}" if d.reason else "")
+                + (f" (would leave: {d.leaves})" if d.leaves else "")
             )
         )
     return 0

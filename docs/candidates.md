@@ -3,21 +3,33 @@
 `drafter candidates list` answers one question: which exploited threats touch
 packages Compromise Checker can judge?
 
-## Signs of exploitation (plan D3)
+## Signs of an attack (plan D3; the checker's scope, 2026-11-10)
 
-A CVE is signalled when any of these is true:
+A CVE comes onto the list when any of these is true:
 
 | Sign | From | Time used |
 |---|---|---|
 | on CISA's list | `kev` | the day CISA added it |
 | CISA rates it "exploitation: active" | `nvd` (CISA's SSVC rating) | CISA's rating time |
-| Ubuntu priority `critical` | `osv-ubuntu` | Ubuntu's first publication of the CVE |
-| Red Hat severity Critical | `redhat` | the day Red Hat made it public |
 | added by hand | `drafter candidates add CVE-… --note "…"` | when it was added |
+
+Adding by hand needs `--note`, saying where the report of attacks came from.
 
 CISA's list alone is late: PHP2Shell's first attacks and fixes were on
 2026-10-21, and it joined the list on 2026-10-26. CISA rated it "exploitation:
-active" on 2026-10-21, and Ubuntu rated it critical.
+active" on 2026-10-21.
+
+**A vendor's rating alone lists nothing.** Ubuntu's priority `critical`
+(`osv-ubuntu`) and Red Hat's severity Critical (`redhat`) are still read, and are
+shown on a CVE that has a sign of an attack. But a pack is for an attack seen in
+the wild, and a rating says how bad a flaw could be, not that anyone is using it.
+Until 2026-11-10 a rating was enough to list a CVE, and .NET, ca-certificates, Java
+and edk2 all came in that way: none was being attacked, and none left anything on a
+server to look for. Now such a CVE is **counted in one line** ("Rated critical by
+a vendor, no sign of an attack"), its vendor records aren't read (but for Ubuntu's,
+once, which dates Ubuntu's rating), and it joins no threat, even one for the same
+package in the same days. If attacks are reported
+later, it comes onto the list then.
 
 ## The vendors' own records
 
@@ -34,9 +46,11 @@ behind the records never read, so one record that keeps failing can't hold up th
 rest. The hourly timer runs it after reading the feeds, and `drafter feeds status`
 shows it as `vendor-records`.
 
-A CVE counts from its first sign. Signs are gathered over the whole history,
-because CISA re-stamps old SSVC ratings in batches: CVE-2022-30333, on CISA's list
-since 2022, would otherwise show up as a threat from August 2026.
+A CVE counts from its first sign of an attack. Signs are gathered over the whole
+history, because CISA re-stamps old SSVC ratings in batches: CVE-2022-30333, on
+CISA's list since 2022, would otherwise show up as a threat from August 2026. A
+vendor's rating doesn't start the clock: a CVE rated critical in March and
+attacked in October is new in October.
 
 ## Sorting
 
@@ -58,8 +72,6 @@ Each signalled CVE lands in one place:
   (for PHP2Shell it named Palo Alto's PAN-OS, not `php:php`). A match on words
   alone is marked so. Over the 180 days it added 4 CVEs, all PHP add-ons for
   Magento and Joomla ("PHP object injection"): noise to read past, never a miss.
-  Only CISA's signs and adding by hand count here, not a vendor's rating of its
-  own packages.
 - **No vendor package, and NVD names no product yet:** signalled in the last 30
   days by CISA or by hand, listed by number, since NVD may not have named the
   products yet.
@@ -70,13 +82,13 @@ Each signalled CVE lands in one place:
 - **Not on a supported release:** counted; `drafter candidates list --all` lists
   them by number with the products NVD names (mostly Chrome, Windows and
   appliances, and open-source software installed from upstream, such as Drupal).
+- **Rated critical by a vendor, no sign of an attack:** counted only (above).
 - **Vendor records not read yet:** listed by CVE number, with a reminder to
   refresh.
 
-A vendor's own rating speaks for its own packages only. Red Hat rating a CVE
-Critical says nothing about an Ubuntu universe package, so a CVE signalled only by
-Red Hat's rating is sorted by its Red Hat packages, and likewise for Ubuntu. CISA's
-list, CISA's rating and adding by hand speak for every vendor.
+A vendor's own rating is shown only where it speaks: Red Hat rating a CVE Critical
+says nothing about an Ubuntu universe package, so on a CVE with no Red Hat package
+on a supported release its rating isn't shown, and likewise for Ubuntu.
 
 Red Hat's container images (OpenShift's CoreOS, say) aren't packages on a host, so
 they're left out; `kpatch-patch` (kernel live patches) counts as a kernel. On
@@ -94,13 +106,33 @@ vendor records without fetching anything.
 
 ## What "network-facing" means here
 
-D3 counts a vendor's top severity only for network-facing packages. CVSS can't
+D3 first counted a vendor's top severity for network-facing packages. CVSS can't
 say which those are: Red Hat marks 245 of its 262 Critical CVEs in the 180 days to
-2026-11-07 as network-reachable, browser engines included. So the rule is the
-other way round (John, 2026-11-07): everything on a supported release counts,
-except a short reviewed list of set-asides, shown with reasons.
+2026-11-07 as network-reachable, browser engines included. So the rule became
+(John, 2026-11-07): everything on a supported release counts, except a short
+reviewed list of set-asides, shown with reasons. Since 2026-11-10 a rating lists
+nothing at all (above); the set-asides still sort the CVEs that are attacked.
 
-## History test (2026-11-07)
+## After the scope rule (2026-11-10)
+
+The same 180 days from 2026-05-11, on a copy of the real store, with only signs of
+an attack listing a CVE:
+
+| Section | Threats | CVEs |
+|---|---|---|
+| Can judge | 8 | 10 |
+| Kernels (notice only) | 4 | 7 |
+| Set aside | 1 | 1 |
+| Third-party builds | 2 | 4 |
+| Not on a supported release | | 156 |
+| Rated critical by a vendor, no sign of an attack | | 324 |
+
+About four threats every three months that the tool could judge, each of them
+attacked. The 30 days to 2026-11-10 went from eight threats under "Can judge" to
+four: PHP2Shell, Brotli, Ruby and OpenSSH stayed; .NET, ca-certificates, Java and
+edk2 left.
+
+## History test (2026-11-07, when a vendor's rating still listed a CVE)
 
 The 180 days from 2026-05-11, on a copy of the real store: 578 CVEs signalled,
 1,156 vendor records read in 5 minutes, none failed.

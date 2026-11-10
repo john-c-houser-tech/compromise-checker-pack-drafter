@@ -158,7 +158,9 @@ def test_a_kept_page_is_read_by_what_it_holds():
 @pytest.fixture
 def approved(store):
     _seed(store)
-    decisions.record(store, _php(store), "approve", "", "jch", "2026-11-09T01:00:00.000000Z")
+    decisions.record(
+        store, _php(store), "approve", "", "jch", "2026-11-09T01:00:00.000000Z", leaves="a webshell"
+    )
     return decisions.history(store)[0]
 
 
@@ -226,7 +228,15 @@ def test_a_page_the_drafter_reads_already_isnt_added_again(store, approved):
 
 def test_deciding_again_keeps_what_was_added(store, approved):
     added.add(store, approved.id, SANSEC, "jch", lambda: NOW, fetch=_ok)
-    decisions.record(store, _php(store), "approve", "again", "jch", "2026-11-09T02:00:00.000000Z")
+    decisions.record(
+        store,
+        _php(store),
+        "approve",
+        "again",
+        "jch",
+        "2026-11-09T02:00:00.000000Z",
+        leaves="a webshell",
+    )
     newer = decisions.history(store)[0]
     assert newer.id != approved.id
     assert [a.url for a in added.listed(store, newer.id) if a.kept] == [SANSEC]
@@ -390,7 +400,9 @@ def test_an_added_page_is_sent_cited_and_in_the_header(tmp_path):
 
     s = Store(tmp_path / "drafter.sqlite3")
     _cve(s, CVE)
-    decisions.record(s, _threat(s), "approve", "", "jch", "2026-11-09T01:00:00.000000Z")
+    decisions.record(
+        s, _threat(s), "approve", "", "jch", "2026-11-09T01:00:00.000000Z", leaves="a webshell"
+    )
     decision = decisions.history(s)[0]
     added.add(s, decision.id, SANSEC, "jch", lambda: NOW, fetch=_ok)
     by_hand = draft.added_sources(s, decision.id)
@@ -413,7 +425,9 @@ def test_the_dry_run_counts_added_pages(tmp_path, capsys, monkeypatch):
 
     s = Store(tmp_path / "drafter.sqlite3")
     _cve(s, CVE)
-    decisions.record(s, _threat(s), "approve", "", "jch", "2026-11-09T01:00:00.000000Z")
+    decisions.record(
+        s, _threat(s), "approve", "", "jch", "2026-11-09T01:00:00.000000Z", leaves="a webshell"
+    )
     added.add(s, decisions.history(s)[0].id, SANSEC, "jch", lambda: NOW, fetch=_ok)
     s.close()
     monkeypatch.setattr(cli, "Fetcher", lambda: FakeFetcher())

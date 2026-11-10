@@ -1,4 +1,6 @@
 """Red Hat's Security Data API: CVEs Red Hat rates Critical, its top severity (D3).
+The rating is shown on an attacked CVE and counted; since 2026-11-10 it lists nothing
+on its own (candidates.py).
 
 Asks for Critical CVEs made public since 30 days before the saved position, so a
 CVE raised to Critical a few weeks after it went public is still seen. Red Hat's
