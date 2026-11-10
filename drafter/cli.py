@@ -753,6 +753,11 @@ def _pack_write(ctx: Context, args) -> int:
         print(safe(f"The prose: edited after the AI wrote it ({', '.join(done.edits)})."))
     else:
         print("The prose: as the AI wrote it, unedited.")
+    if any(e.native for e in a.by_hand):
+        print(
+            "NATIVE ENTRIES: checker 0.1.1 and earlier refuse this pack (native: true), and"
+            " report it on every pull: publish it only after a checker release that reads it."
+        )
     print(safe(f"Written to {done.path}, read-only, on branch {done.branch} (from {done.base})."))
     print(f"SHA-256: {done.sha256}")
     print(
@@ -797,7 +802,7 @@ def _decisions(store: Store) -> int:
         print(
             safe(
                 f"{d.decided_at[:16].replace('T', ' ')}  {verdict}  {', '.join(d.families) or '?'}"
-                f"  {', '.join(d.cves)}  by {d.decided_by}: {d.reason or '(no reason given)'}"
+                f"  {', '.join(d.cves)}  by {d.decided_by}" + (f": {d.reason}" if d.reason else "")
             )
         )
     return 0

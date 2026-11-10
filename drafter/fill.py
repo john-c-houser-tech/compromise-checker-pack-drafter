@@ -66,6 +66,7 @@ class Entry:
     source: str
     origin: str  # ubuntu, redhat, alma
     note: str = ""
+    native: bool = False  # a native Ubuntu package: versions with no revision (by hand only)
 
 
 OTHER_BUILDS = ("cant_judge", "not_affected")
@@ -320,6 +321,27 @@ def ubuntu_entries(record: dict, cve: str, filters: list[str], draft: Draft) -> 
                     )
                     continue
                 group_fixed, group_listed = binary_fixed, mapped
+            if group_fixed and "-" not in group_fixed.split(":", 1)[-1]:
+                # A native package (ca-certificates): no revision, so the checker needs
+                # native: true, and its builds don't carry the "ubuntu" mark the shapes
+                # are cut on (20260601~24.04.1): a person writes them by hand.
+                draft.conflicts.append(
+                    f"{release} {', '.join(group)}: Ubuntu's fix {_clean(group_fixed, 60)} has no"
+                    " revision, a native package: leave these binaries out of the filter"
+                    " (rhel:… only) and write Ubuntu's entries by hand with native = true"
+                )
+                out.append(
+                    Entry(
+                        release=release,
+                        binary_names=group,
+                        versions=UNMAPPED,
+                        fixed=None,
+                        source=source,
+                        origin="ubuntu",
+                        note="a native package, written by hand: every build reads can't judge",
+                    )
+                )
+                continue
             shapes = sorted(
                 {ubuntu_shape(v) for v in [*group_listed, *([group_fixed] if group_fixed else [])]}
             )
@@ -716,7 +738,7 @@ def _merge(draft: Draft) -> None:
     seen: set[tuple] = set()
     kept: list[Entry] = []
     for e in draft.entries:
-        key = (e.release, tuple(e.binary_names), e.versions, e.fixed)
+        key = (e.release, tuple(e.binary_names), e.versions, e.fixed, e.native)
         if key in seen:
             continue
         seen.add(key)
@@ -803,6 +825,8 @@ def render_yaml(draft: Draft) -> str:
             lines.append(f"      versions: {_q(e.versions)}")
         lines.append(f"      fixed: {_q(e.fixed) if e.fixed else 'null'}")
         lines.append(f"      source: {_q(source)}")
+        if e.native:
+            lines.append("      native: true")
     return "\n".join(lines) + "\n"
 
 
@@ -862,17 +886,17 @@ def compare(draft: Draft, pack_text: str) -> str:
     pack = yaml.safe_load(pack_text) or {}
     signed = (pack.get("exposure") or {}).get("packages") or []
 
-    def key(release, fixed, names):
-        return (release, fixed or None, tuple(sorted(names or [])))
+    def key(release, fixed, names, native=False):
+        return (release, fixed or None, tuple(sorted(names or [])), native is True)
 
     theirs: dict[tuple, list] = {}
     for p in signed:
-        theirs.setdefault(key(p.get("release"), p.get("fixed"), p.get("binary_names")), []).append(
-            p
-        )
+        theirs.setdefault(
+            key(p.get("release"), p.get("fixed"), p.get("binary_names"), p.get("native", False)), []
+        ).append(p)
     ours: dict[tuple, list] = {}
     for e in draft.entries:
-        ours.setdefault(key(e.release, e.fixed, e.binary_names), []).append(e)
+        ours.setdefault(key(e.release, e.fixed, e.binary_names, e.native), []).append(e)
     lines = [f"Compared with {pack.get('id')} version {pack.get('version')}:"]
     same = 0
     for k in sorted(set(ours) & set(theirs), key=str):

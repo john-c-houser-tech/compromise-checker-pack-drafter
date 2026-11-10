@@ -697,10 +697,13 @@ def test_an_approve_needs_no_reason_and_a_reject_does(page, capsys):
     [d] = _stored(page)
     assert (d.verdict, d.reason) == ("approve", "")
     _, html = page.request("GET")
-    assert "with no reason given" in _card_html(html, PHP[0])
+    card = _card_html(html, PHP[0])
+    assert "UTC by jch" in card and "no reason" not in card  # an approve needs none
+    assert "by jch:" not in card and "<q>" not in card
     assert "<td>–</td>" in html
     assert cli.main(["--home", str(page.site.home), "decisions"]) == 0
-    assert "by jch: (no reason given)" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert out.rstrip().endswith("by jch") and "no reason" not in out
     assert cli.main(["--home", str(page.site.home), "candidates", "list", "--days", "60"]) == 0
     assert "decision: approved 2026-11-07\n" in capsys.readouterr().out
 
@@ -713,6 +716,8 @@ def test_a_reject_comes_back_when_attacks_are_reported_after_it(page, capsys):
     assert d.signs == ()
     _, html = page.request("GET")
     assert "pill-reject" in _card_html(html, DOTNET)
+    # a reason still shows, after the name
+    assert re.search(r"by jch:\s*<q>no sign of attacks</q>", _card_html(html, DOTNET))
     _with(page, lambda s: _kev(s, DOTNET, "2026-11-07"))
     _, html = page.request("GET")
     card = _card_html(html, DOTNET)

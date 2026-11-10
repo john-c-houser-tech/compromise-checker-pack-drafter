@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 from drafter import assemble, cli, decisions, fill
+from drafter.checkerformat import format as packformat
 from drafter.store import Store
 from tests.conftest import NOW
 from tests.test_draft import CVE, _cve, _threat
@@ -461,7 +462,15 @@ def test_assemblies_are_append_only(store, tmp_path, clone, ready):
             store.db.execute(sql)
 
 
-def test_the_cli_writes_then_tells_how_to_sign(tmp_path, clone, monkeypatch, capsys):
+NATIVE_CERTS = (
+    '[{release = "ubuntu:24.04", binary_names = ["ca-certificates"],'
+    ' fixed = "20260816ubuntu0.24.04.1", native = true,'
+    ' source = "https://launchpad.net/ubuntu/+source/ca-certificates"}]'
+)
+
+
+@pytest.mark.parametrize("native", [False, True])
+def test_the_cli_writes_then_tells_how_to_sign(tmp_path, clone, monkeypatch, capsys, native):
     home = tmp_path / "home"
     home.mkdir()
     s = Store(home / "drafter.sqlite3")
@@ -478,9 +487,10 @@ def test_the_cli_writes_then_tells_how_to_sign(tmp_path, clone, monkeypatch, cap
                                 "https://ubuntu.com/security/notices/USN-8956-1", "ubuntu")],
         ),
     )  # fmt: skip
-    path = _assembly(tmp_path, draft)
+    path = _assembly(tmp_path, draft, **({"by_hand": NATIVE_CERTS} if native else {}))
     assert cli.main(["--home", str(home), "pack", "write", str(path), "--packs", str(clone)]) == 0
     out = capsys.readouterr().out
+    assert ("checker 0.1.1 and earlier refuse this pack" in out) == native
     assert "read-only, on branch pack/brotli-2026-10-v1" in out and "SHA-256: " in out
     assert "minisign -S -s ~/nouriloop-keys/pack.key -m " in out
     assert '-t "brotli-2026-10 version 1"' in out
@@ -718,9 +728,36 @@ def test_a_person_can_write_the_entries_the_vendor_data_cant(store, tmp_path, cl
     assert '- release: "rhel:10"\n      binary_names: ["edk2-ovmf"]\n      fixed: null' in text
 
 
+def test_a_native_ubuntu_package_is_written_as_one(store, tmp_path, clone, ready):
+    # ca-certificates has no revision (20260816ubuntu0.24.04.1 is the whole version):
+    # the checker's format refuses that fix unless the entry says native.
+    draft, _ = ready
+    entry = (
+        '[{{release = "ubuntu:24.04", binary_names = ["ca-certificates"],'
+        ' fixed = "20260816ubuntu0.24.04.1",'
+        ' source = "https://launchpad.net/ubuntu/+source/ca-certificates/20260816ubuntu0.24.04.1"'
+        "{}}}]"
+    )
+    with pytest.raises(assemble.AssembleError, match="(?s)wouldn't read.*native: true"):
+        _write(store, tmp_path, clone, draft, by_hand=entry.format(""))
+    done = _write(store, tmp_path, clone, draft, by_hand=entry.format(", native = true"))
+    text = done.path.read_text()
+    assert '      fixed: "20260816ubuntu0.24.04.1"\n' in text
+    assert "\n      native: true\n" in text
+    pack = packformat.read(text.encode())
+    assert [e.native for e in pack.exposure.packages if e.binary_names == ["ca-certificates"]] == [
+        True
+    ]
+    assert not any(
+        e.native for e in pack.exposure.packages if e.binary_names != ["ca-certificates"]
+    )
+
+
 @pytest.mark.parametrize(
     "entry",
     [
+        '[{release = "rhel:9", binary_names = ["x"], source = "https://x.example/", native = 1}]',
+        '[{release = "rhel:9", binary_names = ["x"], source = "https://x/", native = true}]',
         '[{release = "debian:12", binary_names = ["x"], source = "https://x.example/"}]',
         '[{release = "rhel:9", binary_names = [], source = "https://x.example/"}]',
         '[{release = "rhel:9", binary_names = ["x"]}]',

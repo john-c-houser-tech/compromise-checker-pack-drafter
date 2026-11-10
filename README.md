@@ -6,6 +6,13 @@ It watches public feeds for exploited threats that touch packages the checker ca
 judge, fills in package versions from vendor data, and says plainly what it can't
 fill in. A person approves every pack, and signs it by hand.
 
+Compromise Checker answers one question: has this server been broken into? It isn't
+a vulnerability scanner or a patching tool. So since 2026-11-10 a threat is approved
+for a pack only if it is being exploited **and** leaves signs on a server that the
+checker can see, so the pack carries detections; a flaw that fails either is
+rejected, however serious
+([which threats get a pack](https://github.com/john-c-houser-tech/compromise-checker/blob/main/docs/packs.md#which-threats-get-a-pack)).
+
 The drafter reads only public data. It holds no signing key, no GitHub token and
 no evidence from anyone's machines, so it can't publish anything by itself.
 
