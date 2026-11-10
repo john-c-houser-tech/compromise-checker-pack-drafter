@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 from drafter import assemble, cli, decisions, fill
+from drafter.checkerformat import format as packformat
 from drafter.store import Store
 from tests.conftest import NOW
 from tests.test_draft import CVE, _cve, _threat
@@ -718,9 +719,35 @@ def test_a_person_can_write_the_entries_the_vendor_data_cant(store, tmp_path, cl
     assert '- release: "rhel:10"\n      binary_names: ["edk2-ovmf"]\n      fixed: null' in text
 
 
+def test_a_native_ubuntu_package_is_written_as_one(store, tmp_path, clone, ready):
+    # ca-certificates has no revision (20260816ubuntu0.24.04.1 is the whole version):
+    # the checker's format refuses that fix unless the entry says native.
+    draft, _ = ready
+    entry = (
+        '[{{release = "ubuntu:24.04", binary_names = ["ca-certificates"],'
+        ' fixed = "20260816ubuntu0.24.04.1",'
+        ' source = "https://launchpad.net/ubuntu/+source/ca-certificates/20260816ubuntu0.24.04.1"'
+        "{}}}]"
+    )
+    with pytest.raises(assemble.AssembleError, match="(?s)wouldn't read.*native: true"):
+        _write(store, tmp_path, clone, draft, by_hand=entry.format(""))
+    done = _write(store, tmp_path, clone, draft, by_hand=entry.format(", native = true"))
+    text = done.path.read_text()
+    assert '      fixed: "20260816ubuntu0.24.04.1"\n' in text
+    assert "\n      native: true\n" in text
+    pack = packformat.read(text.encode())
+    assert [e.native for e in pack.exposure.packages if e.binary_names == ["ca-certificates"]] == [
+        True
+    ]
+    assert not any(
+        e.native for e in pack.exposure.packages if e.binary_names != ["ca-certificates"]
+    )
+
+
 @pytest.mark.parametrize(
     "entry",
     [
+        '[{release = "rhel:9", binary_names = ["x"], source = "https://x.example/", native = 1}]',
         '[{release = "debian:12", binary_names = ["x"], source = "https://x.example/"}]',
         '[{release = "rhel:9", binary_names = [], source = "https://x.example/"}]',
         '[{release = "rhel:9", binary_names = ["x"]}]',

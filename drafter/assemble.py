@@ -108,12 +108,13 @@ def _printable(text: str, name: str) -> str:
 def _by_hand(item: Any) -> fill.Entry:
     """A package entry a person writes: what the vendor data couldn't (a release Red
     Hat calls affected with no fixed build to take binary names from, say)."""
-    keys = {"release", "binary_names", "versions", "fixed", "source", "note"}
+    keys = {"release", "binary_names", "versions", "fixed", "source", "note", "native"}
     if not isinstance(item, dict) or set(item) - keys or not {"release", "binary_names",
                                                                "source"} <= set(item):  # fmt: skip
         raise AssembleError(
             "exposure.by_hand: each entry has release, binary_names and source, and may have"
-            " versions, fixed (none: no fix yet) and note"
+            " versions, fixed (none: no fix yet), note and native (true: a native Ubuntu"
+            " package, whose versions have no revision)"
         )
     release = item["release"]
     if not isinstance(release, str) or not re.fullmatch(r"(ubuntu|rhel):[\d.]+", release):
@@ -124,6 +125,8 @@ def _by_hand(item: Any) -> fill.Entry:
     for key in ("versions", "fixed", "source", "note"):
         if key in item and not isinstance(item[key], str):
             raise AssembleError(f"exposure.by_hand: {key} is text")
+    if not isinstance(item.get("native", False), bool):
+        raise AssembleError("exposure.by_hand: native is true or false")
     note = _printable(" ".join(str(item.get("note", "")).split()), "by_hand note")
     return fill.Entry(
         release,
@@ -133,6 +136,7 @@ def _by_hand(item: Any) -> fill.Entry:
         item["source"],
         "byhand",
         f"added by a person{': ' + note if note else ''}",
+        item.get("native", False),
     )
 
 

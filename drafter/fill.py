@@ -66,6 +66,7 @@ class Entry:
     source: str
     origin: str  # ubuntu, redhat, alma
     note: str = ""
+    native: bool = False  # a native Ubuntu package: versions with no revision (by hand only)
 
 
 OTHER_BUILDS = ("cant_judge", "not_affected")
@@ -803,6 +804,8 @@ def render_yaml(draft: Draft) -> str:
             lines.append(f"      versions: {_q(e.versions)}")
         lines.append(f"      fixed: {_q(e.fixed) if e.fixed else 'null'}")
         lines.append(f"      source: {_q(source)}")
+        if e.native:
+            lines.append("      native: true")
     return "\n".join(lines) + "\n"
 
 

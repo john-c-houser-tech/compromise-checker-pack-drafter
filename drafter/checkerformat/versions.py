@@ -1,5 +1,5 @@
 # Copied from Compromise Checker (john-c-houser-tech/compromise-checker) at commit
-# f3a564623d59d58fa42ded9becf69e3ae20c878c, checker/packs/versions.py, so every draft is read exactly as
+# a2588ef47852d0ad294c292d8bce8f0b0da2bf53, checker/packs/versions.py, so every draft is read exactly as
 # the tool reads it (plan ground rules). Don't edit: tests/test_checkerformat.py
 # compares it with the checker's own copy. AGPL-3.0, NouriLoop LLC.
 """Package version ordering, as each distribution's own tools order them:
