@@ -707,6 +707,24 @@ def _reference_notes(references: list, found: list[drafting.Source]) -> list[str
     return notes
 
 
+NO_DETECTIONS = (
+    "the draft has no detections: a pack is for an attack that leaves signs on a server,"
+    " and this one names nothing for the checker to look for. Add a detection the sources"
+    " support, or reject the threat on the page; a pack is never written without one"
+)
+
+
+def _in_scope(store: Store, reviewed: Reviewed) -> Any:
+    """The approve the draft stands under, if a pack may be made from the two (the
+    checker's scope, 2026-11-10). No override: a pack with nothing to look for only
+    tells a server it was open to something, which is a vulnerability scanner's job."""
+    decision = drafting.in_scope(drafting.approved(store, reviewed.cves))  # DraftError
+    detections = reviewed.parts.get("detections")
+    if not isinstance(detections, list) or not any(isinstance(d, dict) and d for d in detections):
+        raise AssembleError(NO_DETECTIONS)
+    return decision
+
+
 def write(
     store: Store,
     ctx: Any,
@@ -717,7 +735,7 @@ def write(
 ) -> Written:
     clone = _clone(clone_path)
     reviewed = read_draft(a.draft)
-    decision = drafting.approved(store, reviewed.cves)
+    decision = _in_scope(store, reviewed)
     if reviewed.decision_id is not None and reviewed.decision_id != decision.id:
         raise AssembleError(
             f"the draft was made under decision {reviewed.decision_id}; the threat was decided"
@@ -975,7 +993,7 @@ def check(
 def template(store: Store, draft_path: Path, clone_path: Path) -> str:
     """An assembly file to edit, with what the store suggests."""
     reviewed = read_draft(Path(os.path.expanduser(draft_path)))
-    decision = drafting.approved(store, reviewed.cves)
+    decision = _in_scope(store, reviewed)
     clone = Path(os.path.expanduser(clone_path)).resolve()
     family = (decision.families or ("threat",))[0]
     signs = drafting.sources(store, reviewed.cves)

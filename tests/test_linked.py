@@ -57,7 +57,9 @@ def approved_store(store):
     from drafter import decisions
 
     _cve(store, CVE)
-    decisions.record(store, _threat(store), "approve", "", "jch", "2026-11-08T18:53:00Z")
+    decisions.record(
+        store, _threat(store), "approve", "", "jch", "2026-11-08T18:53:00Z", leaves="a webshell"
+    )
     return store
 
 
@@ -271,7 +273,7 @@ def test_the_cli_dry_run_fetches_nothing_and_counts_pages_at_their_most(
     s.db.execute("UPDATE fetches SET body = ? WHERE id = ?",
                  (gzip.compress(json.dumps(record).encode()), row[0]))  # fmt: skip
     s.db.commit()
-    decisions.record(s, _threat(s), "approve", "", "jch", "t1")
+    decisions.record(s, _threat(s), "approve", "", "jch", "t1", leaves="a webshell")
     s.close()
     fake = FakeFetcher()
     fake.add(PHP_A_API, ok(ADVISORY, url=PHP_A_API))
@@ -429,7 +431,7 @@ def test_the_cli_draft_fetches_the_linked_pages_and_lists_them(tmp_path, capsys,
     s.db.execute("UPDATE fetches SET body = ?, same_as = NULL WHERE id = ?",
                  (gzip.compress(json.dumps(record).encode()), row[0]))  # fmt: skip
     s.db.commit()
-    decisions.record(s, _threat(s), "approve", "", "jch", "t1")
+    decisions.record(s, _threat(s), "approve", "", "jch", "t1", leaves="a webshell")
     s.close()
     fake = FakeFetcher()
     fake.add(PHP_A_API, ok(ADVISORY, url=PHP_A_API))
@@ -470,7 +472,7 @@ def test_the_dry_run_leaves_out_what_the_draft_would(tmp_path, capsys, monkeypat
     s.db.execute("UPDATE fetches SET body = ?, same_as = NULL WHERE id = ?",
                  (gzip.compress(json.dumps(record).encode()), row[0]))  # fmt: skip
     s.db.commit()
-    decisions.record(s, _threat(s), "approve", "", "jch", "t1")
+    decisions.record(s, _threat(s), "approve", "", "jch", "t1", leaves="a webshell")
     fake = FakeFetcher()
     for url in alerts:
         fake.add(url, ok(b"<p>" + b"w" * 30_000 + b"</p>", url=url))

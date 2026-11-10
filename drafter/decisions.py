@@ -8,6 +8,11 @@ A CVE that joined later, or CVEs decided apart, make it ask for a look again.
 A reason is needed to reject, not to approve (A.4b): an approve rests on what the
 card showed, a reject is the decision someone will ask about later. And a reject
 keeps the signs of attacks it was made with, so a new one brings it back.
+
+An approve says what the attack would leave on a server (the checker's scope,
+2026-11-10: a pack is for an attack seen in the wild that leaves signs there), and
+every CVE under it has a sign of an attack. An approve from before that rule which
+covers a CVE with no such sign asks for a look again, and is never drafted from.
 """
 
 from __future__ import annotations
@@ -24,6 +29,7 @@ DECIDABLE = ("judge", "thirdparty")  # kernels get a notice (D2); set-asides a f
 SECTION_NAMES = {"judge": "Can judge", "thirdparty": "Third-party builds"}
 VERDICTS = ("approve", "reject")
 MAX_REASON = 1000
+MAX_LEAVES = 500
 
 
 class DecisionError(ValueError):
@@ -43,6 +49,9 @@ class Decision:
     # The signs of attacks it was made with ("kev:CVE-…"); None if made before
     # schema 5, when they weren't kept, and so never brought back by one.
     signs: tuple[str, ...] | None = None
+    # An approve's answer to "what would it leave on a server?"; None for a reject,
+    # and for an approve made before schema 9 asked.
+    leaves: str | None = None
 
 
 @dataclass(frozen=True)
@@ -57,6 +66,7 @@ class State:
     section: str | None = None  # the section `decision` was made in, if not this one
     families: tuple[str, ...] | None = None  # what `decision` was shown, if not these
     attacked: tuple[str, ...] = ()  # signs of attacks since a reject, described
+    unattacked: tuple[str, ...] = ()  # CVEs an approve covers with no sign of an attack
 
     @property
     def open(self) -> bool:
@@ -74,6 +84,25 @@ def clean_reason(text: str, verdict: str = "reject") -> str:
     return text
 
 
+def clean_leaves(text: str) -> str:
+    """An approve's one line on what the attack would leave on a server."""
+    text = " ".join("".join(ch if ch.isprintable() else " " for ch in text).split())
+    if not text:
+        raise DecisionError(
+            "to approve, say what the attack would leave on a server (a pack is for"
+            " signs the checker can look for); if it leaves nothing, reject it"
+        )
+    if len(text) > MAX_LEAVES:
+        raise DecisionError(f"what it leaves is {len(text)} characters; {MAX_LEAVES} at most")
+    return text
+
+
+def without_a_sign(cves: Collection[str], signs: Collection[str]) -> tuple[str, ...]:
+    """The CVEs that none of these signs of attacks ("kev:CVE-…") is about."""
+    have = {key.split(":", 1)[1] for key in signs}
+    return tuple(sorted(cve for cve in cves if cve not in have))
+
+
 def record(
     store: Store,
     threat: Threat,
@@ -81,7 +110,11 @@ def record(
     reason: str,
     by: str,
     when: str,
+    *,
+    leaves: str = "",
 ) -> Decision:
+    """`leaves`: what the attack would leave on a server; needed to approve, and
+    not kept with a reject."""
     if threat.kind not in DECIDABLE:
         raise DecisionError(f"a {threat.kind} threat isn't approved or rejected here")
     if verdict not in VERDICTS:
@@ -91,11 +124,19 @@ def record(
     signs = tuple(sorted(attack_signs(threat)))
     if not cves or not all(CVE_ID.match(cve) for cve in cves):
         raise DecisionError("a threat is one or more CVE numbers")
+    left = None
+    if verdict == "approve":
+        bare = without_a_sign(cves, signs)
+        if bare:
+            raise DecisionError(
+                f"no sign of an attack on {', '.join(bare)}: a pack is for attacks seen in the wild"
+            )
+        left = clean_leaves(leaves)
     by = " ".join(by.split())[:100] or "?"
     with store.transaction():
         cur = store.db.execute(
             "INSERT INTO decision (decided_at, cves, kind, families, verdict, reason,"
-            " decided_by, signs) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            " decided_by, signs, leaves) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 when,
                 json.dumps(list(cves)),
@@ -105,17 +146,28 @@ def record(
                 reason,
                 by,
                 json.dumps(list(signs)),
+                left,
             ),
         )
     return Decision(
-        cur.lastrowid, when, cves, threat.kind, tuple(threat.families), verdict, reason, by, signs
+        cur.lastrowid,
+        when,
+        cves,
+        threat.kind,
+        tuple(threat.families),
+        verdict,
+        reason,
+        by,
+        signs,
+        left,
     )
 
 
 def history(store: Store) -> list[Decision]:
     """Every decision, newest first."""
     rows = store.db.execute(
-        "SELECT id, decided_at, cves, kind, families, verdict, reason, decided_by, signs"
+        "SELECT id, decided_at, cves, kind, families, verdict, reason, decided_by, signs,"
+        " leaves"
         " FROM decision ORDER BY id DESC"
     ).fetchall()
     return [
@@ -129,6 +181,7 @@ def history(store: Store) -> list[Decision]:
             row["reason"],
             row["decided_by"],
             None if row["signs"] is None else tuple(json.loads(row["signs"])),
+            row["leaves"],
         )
         for row in rows
     ]
@@ -177,6 +230,16 @@ def attacked_since(decision: Decision, threat: Threat) -> tuple[str, ...]:
     return tuple(out)
 
 
+def unattacked_under(decision: Decision) -> tuple[str, ...]:
+    """The CVEs an approve covers that had no sign of an attack when it was made:
+    one from before the scope rule, when a vendor's rating listed a CVE. It isn't
+    drafted from, and its threat asks for a look again. An approve from before
+    schema 5 kept no signs, so it can't be told and is left alone."""
+    if decision.verdict != "approve" or decision.signs is None:
+        return ()
+    return without_a_sign(decision.cves, decision.signs)
+
+
 def shown_signs(threat: Threat) -> str:
     """The signs of attacks a card showed, as its form sends them back."""
     return ",".join(sorted(attack_signs(threat)))
@@ -198,8 +261,9 @@ def state(threat: Threat, by_cve: dict[str, Decision], listed: Collection[str] =
     section = newest.kind if newest.kind != threat.kind else None
     families = newest.families if newest.families != tuple(threat.families) else None
     attacked = attacked_since(newest, threat)
-    if new or apart or moved or section or families is not None or attacked:
-        return State("again", newest, new, apart, moved, section, families, attacked)
+    unattacked = unattacked_under(newest)
+    if new or apart or moved or section or families is not None or attacked or unattacked:
+        return State("again", newest, new, apart, moved, section, families, attacked, unattacked)
     return State(newest.verdict, newest)
 
 
@@ -210,7 +274,8 @@ def describe(st: State) -> str:
         return "undecided"
     said = f"{'approved' if d.verdict == 'approve' else 'rejected'} {d.decided_at[:10]}"
     if st.word != "again":
-        return f"{said}: {d.reason}" if d.reason else said
+        said = f"{said}: {d.reason}" if d.reason else said
+        return f"{said} (would leave: {d.leaves})" if d.leaves else said
     parts = []
     if st.new:
         parts.append(f"{', '.join(st.new)} came after it")
@@ -224,4 +289,6 @@ def describe(st: State) -> str:
         parts.append(f"shown as {', '.join(st.families) or '?'}")
     if st.attacked:
         parts.append(f"attacks reported since: {', '.join(st.attacked)}")
+    if st.unattacked:
+        parts.append(f"it covers {', '.join(st.unattacked)}, with no sign of an attack")
     return f"look again: {said}, but {'; '.join(parts)}"

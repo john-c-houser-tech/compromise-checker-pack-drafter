@@ -86,6 +86,19 @@ def approved(store: Store, cves: list[str]) -> decisions.Decision:
     return decision
 
 
+def in_scope(decision: decisions.Decision) -> decisions.Decision:
+    """Refuse an approve made before the scope rule (2026-11-10) that covers a CVE
+    with no sign of an attack: nothing new is drafted or written from it."""
+    bare = decisions.unattacked_under(decision)
+    if bare:
+        raise DraftError(
+            f"approved {decision.decided_at[:10]} with no sign of an attack on"
+            f" {', '.join(bare)}: a pack is for attacks seen in the wild. If the threat"
+            " is on the page, decide it again there; if it isn't, nothing is attacking it"
+        )
+    return decision
+
+
 # the sources
 
 
@@ -933,7 +946,7 @@ def draft(
     import anthropic  # only a draft needs it
     import httpx2
 
-    decision = approved(store, cves)
+    decision = in_scope(approved(store, cves))
     cves = list(decision.cves)
     found = sources(store, cves)
     if names is None:

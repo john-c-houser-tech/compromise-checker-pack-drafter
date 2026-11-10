@@ -94,6 +94,8 @@
       <p class="decided">
         {{ "Approved" if d.verdict == "approve" else "Rejected" }} {{ d.decided_at[:16]|replace("T", " ") }} UTC by {{ d.decided_by }}{% if d.reason %}:
         <q>{{ d.reason }}</q>{% endif %}
+        {% if d.leaves %}<br><strong>Would leave on a server:</strong> {{ d.leaves }}{% endif %}
+        {% if st.unattacked %}<br><strong>No sign of an attack on:</strong> {{ st.unattacked|join(", ") }} (approved before packs were kept to attacks seen in the wild; decide again){% endif %}
         {% if st.new %}<br><strong>Came after it:</strong> {{ st.new|join(", ") }}{% endif %}
         {% if st.apart %}<br><strong>Decided apart:</strong> {{ st.apart|join(", ") }}{% endif %}
         {% if st.moved %}<br><strong>Now in another threat:</strong> {{ st.moved|join(", ") }}{% endif %}
@@ -152,6 +154,7 @@
       {% endif %}
       {% set mine = kept.anchor == c.anchor %}
       {% set keep = kept.reason if mine else "" %}
+      {% set keep_leaves = kept.leaves if mine else "" %}
       {% set folded = c.covered or not st.open %}
       {% if not folded %}
       <form class="decide" method="post" action="/decide">
@@ -164,6 +167,8 @@
         <input type="hidden" name="cves" value="{{ c.cves|join(',') }}">
         <input type="hidden" name="families" value="{{ c.families }}">
         <input type="hidden" name="signs" value="{{ c.signs }}">
+        <label for="l-{{ c.anchor }}">What would it leave on a server? (needed to approve: the signs the checker could look for; if nothing, reject)</label>
+        <textarea id="l-{{ c.anchor }}" name="leaves" rows="2" maxlength="500">{{ keep_leaves }}</textarea>
         <label for="r-{{ c.anchor }}">Reason (needed to reject; optional to approve)</label>
         <textarea id="r-{{ c.anchor }}" name="reason" rows="2" maxlength="1000">{{ keep }}</textarea>
         <div class="buttons">
@@ -196,7 +201,7 @@
   {% if not history %}<p class="empty">None yet.</p>{% else %}
   <div class="table-wrap">
   <table>
-    <thead><tr><th>When (UTC)</th><th>Verdict</th><th>Threat</th><th>Reason</th><th>By</th></tr></thead>
+    <thead><tr><th>When (UTC)</th><th>Verdict</th><th>Threat</th><th>Reason</th><th>Would leave on a server</th><th>By</th></tr></thead>
     <tbody>
     {% for d in history %}
       <tr>
@@ -204,6 +209,7 @@
         <td><span class="pill pill-{{ d.verdict }}">{{ "Approved" if d.verdict == "approve" else "Rejected" }}</span></td>
         <td>{{ d.families|join(", ") or "?" }}<br><span class="quiet">{{ d.cves|join(", ") }}</span></td>
         <td>{{ d.reason or "–" }}</td>
+        <td>{{ d.leaves or "–" }}</td>
         <td>{{ d.decided_by }}</td>
       </tr>
     {% endfor %}

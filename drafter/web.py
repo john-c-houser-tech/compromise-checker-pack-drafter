@@ -347,7 +347,7 @@ def page(site: Site, data: dict, *, error: str | None = None, kept: dict | None 
         **{k: v for k, v in data.items() if k not in ("groups", "shown")},
         token=site.token,
         error=error,
-        kept={"anchor": "", "reason": "", **(kept or {})},
+        kept={"anchor": "", "reason": "", "leaves": "", **(kept or {})},
         version=__version__,
     )
 
@@ -517,6 +517,7 @@ class Handler(BaseHTTPRequestHandler):
             "signs",
             "verdict",
             "reason",
+            "leaves",
         } <= set(fields):
             self._text(HTTPStatus.BAD_REQUEST, "the form is missing a field")
             return
@@ -548,7 +549,11 @@ class Handler(BaseHTTPRequestHandler):
             families = [f for f in fields["families"].split(",") if f]
             threat = find(data["groups"], fields["kind"], cves, families, fields["signs"])
             # Back in the box of a threat that has one, whatever happened to the CVEs.
-            kept = {"anchor": nearest(data["shown"], cves), "reason": fields["reason"]}
+            kept = {
+                "anchor": nearest(data["shown"], cves),
+                "reason": fields["reason"],
+                "leaves": fields["leaves"],
+            }
             if threat is None:
                 self._html(
                     HTTPStatus.CONFLICT,
@@ -559,10 +564,15 @@ class Handler(BaseHTTPRequestHandler):
                         " left it, its packages changed, it moved section, or attacks were"
                         " reported). Look at it again below; "
                         + (
-                            "your reason is kept in its box."
+                            "what you wrote is kept in its boxes."
                             if kept["anchor"]
                             else "it has no form now, so here is your reason: "
                             + _quoted(fields["reason"])
+                            + (
+                                "; and what it would leave: " + _quoted(fields["leaves"])
+                                if fields["leaves"].strip()
+                                else ""
+                            )
                         ),
                         kept=kept,
                     ),
@@ -576,6 +586,7 @@ class Handler(BaseHTTPRequestHandler):
                     fields["reason"],
                     self.site.by,
                     timeutil.fmt(self.site.now()),
+                    leaves=fields["leaves"],
                 )
             except decisions.DecisionError as exc:
                 name = ", ".join(threat.families) or "?"

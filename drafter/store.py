@@ -17,7 +17,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 _SCHEMA = """
 CREATE TABLE fetches (
@@ -276,6 +276,21 @@ WHEN NEW.id IS NOT OLD.id OR NEW.decision_id IS NOT OLD.decision_id
   OR NEW.added_at IS NOT OLD.added_at OR NEW.fetch_id IS NOT OLD.fetch_id
   OR NEW.outcome IS NOT OLD.outcome OR OLD.removed_at IS NOT NULL
 BEGIN SELECT RAISE(ABORT, 'an added source is only ever taken back, once'); END;
+""",
+    9: """
+-- The checker's scope (2026-11-10): a pack is for an attack seen in the wild that
+-- leaves signs on a server. So an approve says what the attack would leave there,
+-- in a line, and is made on signs of an attack; the store refuses one without
+-- either, whatever wrote it. Approves made before keep NULL, and are not changed.
+ALTER TABLE decision ADD COLUMN leaves TEXT;
+CREATE TRIGGER decision_approve_in_scope BEFORE INSERT ON decision
+WHEN NEW.verdict = 'approve' AND (
+    NEW.leaves IS NULL OR length(trim(NEW.leaves)) = 0 OR length(NEW.leaves) > 500
+    OR NEW.signs IS NULL OR NEW.signs = '[]'
+)
+BEGIN
+    SELECT RAISE(ABORT, 'an approve needs a sign of an attack and what it leaves on a server');
+END;
 """,
 }
 

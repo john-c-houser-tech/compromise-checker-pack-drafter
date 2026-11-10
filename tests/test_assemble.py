@@ -60,7 +60,9 @@ def clone(tmp_path):
 def ready(store, tmp_path, monkeypatch):
     """An approved brotli threat, its reviewed draft, and vendor data on hand."""
     _cve(store, CVE)
-    decisions.record(store, _threat(store), "approve", "", "jch", "2026-11-08T18:53:00Z")
+    decisions.record(
+        store, _threat(store), "approve", "", "jch", "2026-11-08T18:53:00Z", leaves="a webshell"
+    )
     draft = tmp_path / "brotli.draft.yaml"
     draft.write_text(DRAFT)
     asked = []
@@ -475,7 +477,9 @@ def test_the_cli_writes_then_tells_how_to_sign(tmp_path, clone, monkeypatch, cap
     home.mkdir()
     s = Store(home / "drafter.sqlite3")
     _cve(s, CVE)
-    decisions.record(s, _threat(s), "approve", "", "jch", "2026-11-08T18:53:00Z")
+    decisions.record(
+        s, _threat(s), "approve", "", "jch", "2026-11-08T18:53:00Z", leaves="a webshell"
+    )
     s.close()
     draft = tmp_path / "brotli.draft.yaml"
     draft.write_text(DRAFT)
@@ -667,7 +671,9 @@ def test_the_cli_template_refuses_to_overwrite_and_reports_errors(tmp_path, clon
     out.write_text("mine\n")
     s = Store(home / "drafter.sqlite3")
     _cve(s, CVE)
-    decisions.record(s, _threat(s), "approve", "", "jch", "2026-11-08T18:53:00Z")
+    decisions.record(
+        s, _threat(s), "approve", "", "jch", "2026-11-08T18:53:00Z", leaves="a webshell"
+    )
     s.close()
     assert cli.main(["--home", str(home), "pack", "template", "--draft", str(draft),
                      "--packs", str(clone), "--out", str(out)]) == 1  # fmt: skip
@@ -1008,3 +1014,41 @@ def test_a_clash_fill_already_reported_is_reported_once(store, tmp_path, clone, 
     with pytest.raises(assemble.AssembleError) as caught:
         _write(store, tmp_path, clone, draft)
     assert sum("in two entries" in ln for ln in str(caught.value).splitlines()) == 1
+
+
+# the checker's scope (2026-11-10): no pack without something to look for
+
+
+@pytest.mark.parametrize("empty", ["detections: []", "detections:\n- {}"])
+def test_a_draft_with_no_detections_is_never_written(store, tmp_path, clone, ready, empty):
+    draft, asked = ready
+    start = DRAFT.index("detections:")
+    draft.write_text(DRAFT[:start] + empty + "\n" + DRAFT[DRAFT.index("remediation:") :])
+    with pytest.raises(assemble.AssembleError, match="the draft has no detections"):
+        _write(store, tmp_path, clone, draft)
+    with pytest.raises(assemble.AssembleError, match="never written without one"):
+        assemble.template(store, draft, clone)
+    assert asked == []  # stopped before the vendor data is fetched
+    assert store.db.execute("SELECT count(*) FROM pack_assembly").fetchone()[0] == 0
+    assert not (clone / "packs" / "brotli-2026-10").exists()
+
+
+def test_nothing_is_written_from_an_approve_made_with_no_sign_of_an_attack(
+    store, tmp_path, clone, ready
+):
+    # As .NET and ca-certificates were approved, on Red Hat's rating alone.
+    from drafter import draft as drafting
+
+    draft, _ = ready
+    store.db.execute("DROP TRIGGER decision_approve_in_scope")  # made before schema 9
+    store.db.execute(
+        "INSERT INTO decision (decided_at, cves, kind, families, verdict, reason, decided_by,"
+        " signs) VALUES ('2026-11-08T19:00:00Z', ?, 'judge', '[\"brotli\"]', 'approve', '',"
+        " 'jch', '[]')",
+        (f'["{CVE}"]',),
+    )
+    draft.write_text(DRAFT.replace("decision 1", "decision 2"))
+    with pytest.raises(drafting.DraftError, match=f"no sign of an attack on {CVE}"):
+        _write(store, tmp_path, clone, draft)
+    with pytest.raises(drafting.DraftError, match="no sign of an attack"):
+        assemble.template(store, draft, clone)
