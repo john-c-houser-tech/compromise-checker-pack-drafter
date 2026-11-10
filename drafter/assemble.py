@@ -127,6 +127,10 @@ def _by_hand(item: Any) -> fill.Entry:
             raise AssembleError(f"exposure.by_hand: {key} is text")
     if not isinstance(item.get("native", False), bool):
         raise AssembleError("exposure.by_hand: native is true or false")
+    if item.get("native") and not release.startswith("ubuntu:"):
+        raise AssembleError(
+            f"exposure.by_hand: native is for Ubuntu's native packages, not {release}"
+        )
     note = _printable(" ".join(str(item.get("note", "")).split()), "by_hand note")
     return fill.Entry(
         release,

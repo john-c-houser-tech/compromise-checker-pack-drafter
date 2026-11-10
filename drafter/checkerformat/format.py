@@ -1,6 +1,6 @@
 # Copied from Compromise Checker (john-c-houser-tech/compromise-checker) at commit
 # a2588ef47852d0ad294c292d8bce8f0b0da2bf53, checker/packs/format.py, so every draft is read exactly as
-# the tool reads it (plan ground rules). Don't edit: tests/test_checkerformat.py
+# the tool reads it (plan ground rules). Don't edit: tests/test_draft.py
 # compares it with the checker's own copy. AGPL-3.0, NouriLoop LLC.
 """The threat-pack format (DESIGN.md §10.1): a dated, versioned file that
 teaches the tool about one threat. A pack is data, never code: nothing in
