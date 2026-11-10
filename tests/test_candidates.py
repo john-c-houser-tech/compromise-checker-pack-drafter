@@ -500,12 +500,18 @@ def test_red_hat_rating_speaks_only_for_red_hat_packages(store):
     _kev(store, "CVE-2026-2003", "2026-10-21")  # CISA's list speaks for every vendor
     _vendor(store, "CVE-2026-2003", "ubuntu", [_pkg("ubuntu:24.04", "hugo")])
     _vendor(store, "CVE-2026-2003", "redhat", [], found=0)
-    kinds = {x.cve: x.kind for x in c.classify(store, SINCE, RULES)}
-    assert kinds == {
-        "CVE-2026-2001": "elsewhere",
-        "CVE-2026-2002": "setaside",
+    _rh(store, "CVE-2026-2004")  # attacked, and Red Hat's rating with no RHEL package
+    _kev(store, "CVE-2026-2004", "2026-10-21")
+    _vendor(store, "CVE-2026-2004", "ubuntu", [_pkg("ubuntu:24.04", "hugo")])
+    _vendor(store, "CVE-2026-2004", "redhat", [_pkg("rhel:8", "hugo")])
+    found = {x.cve: x for x in c.classify(store, SINCE, RULES)}
+    assert {cve: x.kind for cve, x in found.items()} == {
+        "CVE-2026-2001": "rated",  # a rating alone puts nothing on the list
+        "CVE-2026-2002": "rated",
         "CVE-2026-2003": "judge",
+        "CVE-2026-2004": "judge",
     }
+    assert [s.kind for s in found["CVE-2026-2004"].signals] == ["kev"]
 
 
 def test_red_hat_container_images_are_not_host_packages():
@@ -837,7 +843,7 @@ def test_a_vendor_rating_alone_does_not_make_a_third_party_threat(store):
     )
     _no_vendor_packages(store, "CVE-2026-5004")
     (only,) = c.classify(store, SINCE, RULES, WATCH)
-    assert only.kind == "elsewhere"
+    assert only.kind == "rated"
 
 
 def test_recent_cves_nvd_has_not_named_are_not_ruled_out(store):
@@ -911,7 +917,54 @@ def test_a_vendor_rating_alone_is_not_left_open_either(store):
     _no_vendor_packages(store, "CVE-2026-5008")
     soon = dt.datetime(2026, 11, 7, tzinfo=dt.UTC)
     (only,) = c.classify(store, SINCE, RULES, WATCH, now=soon)
-    assert only.kind == "elsewhere"
+    assert only.kind == "rated"
+
+
+def test_a_rating_alone_is_counted_and_never_listed_or_read(store, ctx):
+    # The scope rule (2026-11-10): packs are for attacks seen in the wild.
+    _rh(store, "CVE-2026-6001")
+    _vendor(store, "CVE-2026-6001", "ubuntu", [], found=0)
+    _vendor(store, "CVE-2026-6001", "redhat", [_pkg("rhel:9", "dotnet8.0")])
+    _rh(store, "CVE-2026-6002")  # its records never read: not "unread" either
+    _kev(store, "CVE-2026-6003", "2026-10-21")
+    _rh(store, "CVE-2026-6003")
+    _vendor(store, "CVE-2026-6003", "ubuntu", [], found=0)
+    _vendor(store, "CVE-2026-6003", "redhat", [_pkg("rhel:9", "dotnet8.0")])
+    found = c.classify(store, SINCE, RULES, WATCH)
+    assert {x.cve: x.kind for x in found} == {
+        "CVE-2026-6001": "rated",
+        "CVE-2026-6002": "rated",
+        "CVE-2026-6003": "judge",
+    }
+    # same package family, same days: the rated CVE still doesn't join the threat
+    (threat,) = c.threats(found)
+    assert [x.cve for x in threat.candidates] == ["CVE-2026-6003"]
+    text = c.render(found, SINCE, [])
+    assert "CVE-2026-6001" not in text and "CVE-2026-6002" not in text
+    assert "Rated critical by a vendor, no sign of an attack: 2 CVE(s), counted only" in text
+    assert "Red Hat severity Critical" in text  # shown on the attacked one
+    assert "not read yet" not in text
+
+
+def test_refresh_reads_no_records_for_a_rating_alone(store, ctx):
+    _rh(store, "CVE-2026-6001")
+    assert c.refresh(ctx, SINCE).fetched == 0
+    assert store.db.execute("SELECT count(*) FROM vendor_cve").fetchone()[0] == 0
+
+
+def test_a_cve_rated_long_ago_and_attacked_now_is_new_now(store):
+    _rh(store, "CVE-2026-6004", "2026-03-01T00:00:00.000000Z")  # long before the window
+    assert c.signals(store, SINCE) == {}
+    _kev(store, "CVE-2026-6004", "2026-10-21")
+    _vendor(store, "CVE-2026-6004", "ubuntu", [], found=0)
+    _vendor(store, "CVE-2026-6004", "redhat", [_pkg("rhel:9", "dotnet8.0")])
+    (only,) = c.classify(store, SINCE, RULES, WATCH)
+    assert only.kind == "judge" and only.first[:10] == "2026-10-21"
+    assert [s.kind for s in only.signals] == ["redhat", "kev"]
+    # and the other way: an old attack with a new rating stays history
+    _kev(store, "CVE-2026-6005", "2026-03-01")
+    _rh(store, "CVE-2026-6005")
+    assert "CVE-2026-6005" not in c.signals(store, SINCE)
 
 
 # focused review of the third-party commit

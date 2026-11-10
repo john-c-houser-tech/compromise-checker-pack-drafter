@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import http.client
+import json
 import re
 import sqlite3
 import threading
@@ -642,6 +643,23 @@ def _rated_only(store, cve, when="2026-10-20T00:00:00.000000Z", package="dotnet8
     _vendor(store, cve, "redhat", [_pkg("rhel:9", package)])
 
 
+def _by_hand(store, cve, when="2026-10-20T00:00:00.000000Z", note="heard of attacks"):
+    """Rated by Red Hat, and on the list because a person added it."""
+    _rated_only(store, cve, when)
+    store.db.execute("INSERT INTO manual (cve, added_at, note) VALUES (?, ?, ?)", (cve, when, note))
+
+
+def _old_reject(store, cves, reason="no sign of attacks"):
+    """A reject from before the scope rule, of a threat that was listed on a
+    vendor's rating alone: it kept no signs of attacks, having none."""
+    store.db.execute(
+        "INSERT INTO decision (decided_at, cves, kind, families, verdict, reason,"
+        " decided_by, signs) VALUES ('2026-11-06T00:00:00.000000Z', ?, 'judge',"
+        " '[\"dotnet\"]', 'reject', ?, 'jch', '[]')",
+        (json.dumps(sorted(cves)), reason),
+    )
+
+
 DOTNET = "CVE-2026-70188"
 
 
@@ -659,7 +677,7 @@ def _with(page, fn):
 
 def test_a_card_says_whether_it_is_attacked_and_what_it_is(page):
     def seed(s):
-        _rated_only(s, DOTNET)
+        _by_hand(s, DOTNET)
         s.db.execute(
             "UPDATE vendor_cve SET title = 'dotnet: smuggling', statement = ? WHERE cve = ?",
             ("Kestrel <script>alert(1)</script> is exposed.", DOTNET),
@@ -676,8 +694,8 @@ def test_a_card_says_whether_it_is_attacked_and_what_it_is(page):
     _with(page, seed)
     _, html = page.request("GET")
     card = _card_html(html, DOTNET)
-    assert "No sign of attacks" in card and "CISA says none (2026-10-20)" in card
-    assert "Listed on Red Hat&#39;s Critical rating alone" in card
+    assert "Added by hand" in card and "CISA says none (2026-10-20)" in card
+    assert "Added by hand: heard of attacks" in card
     assert "Red Hat: dotnet: smuggling" in card
     assert (
         "Over the network, no login, no user action (CVSS 3.1: 9.1, Microsoft&#39;s score)" in card
@@ -709,18 +727,16 @@ def test_an_approve_needs_no_reason_and_a_reject_does(page, capsys):
 
 
 def test_a_reject_comes_back_when_attacks_are_reported_after_it(page, capsys):
-    _with(page, lambda s: _rated_only(s, DOTNET))
-    body = page.form(cves=DOTNET, families="dotnet", verdict="reject", reason="no sign of attacks")
-    assert page.post(body)[0].status == 303
-    [d] = _stored(page)
-    assert d.signs == ()
+    # Rejected while a vendor's rating alone still listed it; off the list since.
+    _with(page, lambda s: (_rated_only(s, DOTNET), _old_reject(s, [DOTNET])))
     _, html = page.request("GET")
-    assert "pill-reject" in _card_html(html, DOTNET)
-    # a reason still shows, after the name
-    assert re.search(r"by jch:\s*<q>no sign of attacks</q>", _card_html(html, DOTNET))
+    assert f'id="t-{DOTNET.lower()}"' not in html
+    assert "no sign of an attack: 1 CVE(s), counted only" in html
     _with(page, lambda s: _kev(s, DOTNET, "2026-11-07"))
     _, html = page.request("GET")
     card = _card_html(html, DOTNET)
+    # a reason still shows, after the name
+    assert re.search(r"by jch:\s*<q>no sign of attacks</q>", card)
     assert "Look again" in card and "Attacks reported since:</strong> on CISA&#39;s list" in card
     assert "2 to decide" in html  # it, and PHP
     home = str(page.site.home)
@@ -736,7 +752,7 @@ def test_a_reject_comes_back_when_attacks_are_reported_after_it(page, capsys):
 
 def test_an_approve_or_a_restamped_sign_does_not_come_back(page):
     def seed(s):
-        _rated_only(s, DOTNET)
+        _by_hand(s, DOTNET)
         for cve in PHP:  # on CISA's list too, so a re-stamp doesn't move its first sign
             _kev(s, cve, "2026-10-21")
 
@@ -776,7 +792,7 @@ def test_a_reject_made_before_schema_5_is_not_brought_back(page):
 
 
 def test_an_older_reject_comes_back_after_its_window(page):
-    _with(page, lambda s: _rated_only(s, DOTNET, "2026-10-10T00:00:00.000000Z"))
+    _with(page, lambda s: _by_hand(s, DOTNET, "2026-10-10T00:00:00.000000Z"))
     page.site.days = 20
     body = page.form(cves=DOTNET, families="dotnet", verdict="reject", reason="no attacks")
     assert page.post(body)[0].status == 303
@@ -841,7 +857,7 @@ def test_web_wants_a_clone_with_an_index(tmp_path, capsys):
 
 
 def test_a_form_from_a_page_that_didnt_show_a_new_sign_is_refused(page):
-    _with(page, lambda s: _rated_only(s, DOTNET))
+    _with(page, lambda s: _by_hand(s, DOTNET))
     body = page.form(cves=DOTNET, families="dotnet", verdict="reject", reason="no attacks")
     _with(page, lambda s: _kev(s, DOTNET, "2026-11-07"))  # the hourly run, meanwhile
     response, html = page.post(body)
@@ -850,7 +866,7 @@ def test_a_form_from_a_page_that_didnt_show_a_new_sign_is_refused(page):
     assert _stored(page) == []
     body = page.form(cves=DOTNET, families="dotnet", verdict="reject", reason="still no")
     assert page.post(body)[0].status == 303
-    assert _stored(page)[0].signs == (f"kev:{DOTNET}",)
+    assert _stored(page)[0].signs == (f"kev:{DOTNET}", f"manual:{DOTNET}")
 
 
 def test_a_reject_made_knowing_of_attacks_isnt_brought_back_by_cisas_list(page):
@@ -866,7 +882,7 @@ def test_a_reject_comes_back_for_its_cve_that_had_no_sign(page):
     other = "CVE-2026-70189"
 
     def seed(s):
-        _rated_only(s, DOTNET)
+        _by_hand(s, DOTNET)  # a person's word only
         _rated_only(s, other)
         _nvd(s, other, "2026-10-20T00:00:00.000000Z")  # this one: CISA says active
 
@@ -905,7 +921,7 @@ def test_a_refused_reject_on_a_folded_card_comes_back_open_and_named(page, tmp_p
 
 def test_a_cve_that_joined_after_a_reject_isnt_an_attack_reported_since(page):
     later = "CVE-2026-70190"
-    _with(page, lambda s: _rated_only(s, DOTNET))
+    _with(page, lambda s: _by_hand(s, DOTNET))
     body = page.form(cves=DOTNET, families="dotnet", verdict="reject", reason="no attacks")
     assert page.post(body)[0].status == 303
 
@@ -939,14 +955,7 @@ def test_bidi_and_control_characters_in_fetched_text_dont_reach_the_page(page):
 
 
 def test_a_reject_added_by_hand_comes_back_when_cisa_confirms_it(page):
-    def seed(s):
-        _rated_only(s, DOTNET)
-        s.db.execute(
-            "INSERT INTO manual (cve, added_at, note) VALUES (?, ?, 'heard of attacks')",
-            (DOTNET, "2026-10-20T00:00:00.000000Z"),
-        )
-
-    _with(page, seed)
+    _with(page, lambda s: _by_hand(s, DOTNET))
     body = page.form(cves=DOTNET, families="dotnet", verdict="reject", reason="rumour only")
     assert page.post(body)[0].status == 303
     assert _stored(page)[0].signs == (f"manual:{DOTNET}",)

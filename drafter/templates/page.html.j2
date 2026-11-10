@@ -187,6 +187,7 @@
   </ul>
   {% endif %}
   <p>Not on a supported release: {{ elsewhere }} CVE(s), counted only (<code>drafter candidates list --all</code> lists them).</p>
+  {% if rated %}<p>Rated critical by a vendor, no sign of an attack: {{ rated }} CVE(s), counted only (packs are for attacks seen in the wild).</p>{% endif %}
   {% if unread %}<p>Vendor records not read yet: {{ unread|length }} CVE(s): {{ unread|join(", ") }}.</p>{% endif %}
 </section>
 

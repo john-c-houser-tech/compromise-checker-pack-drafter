@@ -252,6 +252,7 @@ def view(site: Site, store: Store) -> dict:
         "sections": sections,
         "unnamed": [c for c in found if c.kind == "unnamed"],
         "elsewhere": sum(1 for c in found if c.kind == "elsewhere"),
+        "rated": sum(1 for c in found if c.kind == "rated"),
         "unread": [c.cve for c in found if c.kind == "unread"],
         "older": sum(
             1 for s in sections for card in s["cards"] if card["older"] and not card["covered"]
