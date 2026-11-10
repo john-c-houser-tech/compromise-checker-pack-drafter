@@ -697,10 +697,12 @@ def test_an_approve_needs_no_reason_and_a_reject_does(page, capsys):
     [d] = _stored(page)
     assert (d.verdict, d.reason) == ("approve", "")
     _, html = page.request("GET")
-    assert "with no reason given" in _card_html(html, PHP[0])
+    card = _card_html(html, PHP[0])
+    assert "UTC by jch" in card and "no reason" not in card  # an approve needs none
     assert "<td>–</td>" in html
     assert cli.main(["--home", str(page.site.home), "decisions"]) == 0
-    assert "by jch: (no reason given)" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert out.rstrip().endswith("by jch") and "no reason" not in out
     assert cli.main(["--home", str(page.site.home), "candidates", "list", "--days", "60"]) == 0
     assert "decision: approved 2026-11-07\n" in capsys.readouterr().out
 

@@ -93,7 +93,7 @@
       {% set d = st.decision %}
       <p class="decided">
         {{ "Approved" if d.verdict == "approve" else "Rejected" }} {{ d.decided_at[:16]|replace("T", " ") }} UTC by {{ d.decided_by }}{% if d.reason %}:
-        <q>{{ d.reason }}</q>{% else %}, with no reason given{% endif %}
+        <q>{{ d.reason }}</q>{% endif %}
         {% if st.new %}<br><strong>Came after it:</strong> {{ st.new|join(", ") }}{% endif %}
         {% if st.apart %}<br><strong>Decided apart:</strong> {{ st.apart|join(", ") }}{% endif %}
         {% if st.moved %}<br><strong>Now in another threat:</strong> {{ st.moved|join(", ") }}{% endif %}

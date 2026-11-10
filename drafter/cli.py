@@ -797,7 +797,7 @@ def _decisions(store: Store) -> int:
         print(
             safe(
                 f"{d.decided_at[:16].replace('T', ' ')}  {verdict}  {', '.join(d.families) or '?'}"
-                f"  {', '.join(d.cves)}  by {d.decided_by}: {d.reason or '(no reason given)'}"
+                f"  {', '.join(d.cves)}  by {d.decided_by}" + (f": {d.reason}" if d.reason else "")
             )
         )
     return 0
