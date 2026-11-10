@@ -566,9 +566,12 @@ def test_a_reason_with_no_box_left_is_shown_in_the_message(page):
         _vendor(s, cve, "ubuntu", [_pkg("ubuntu:24.04", "linux-aws")])
         _vendor(s, cve, "redhat", [], found=0)
     s.close()
-    response, html = page.post(page.form(reason="keep this somewhere"))
+    response, html = page.post(page.form(reason="keep this somewhere", leaves="and <this>"))
     assert response.status == 409
-    assert "here is your reason: keep this somewhere" in html
+    assert (
+        "here is your reason: keep this somewhere; and what it would leave: and &lt;this&gt;"
+        in html
+    )
 
 
 def test_a_decision_straddling_the_window_edge_stays_decided(page, capsys):
@@ -995,9 +998,12 @@ def test_an_approve_says_what_it_would_leave_on_a_server(store):
     with pytest.raises(decisions.DecisionError, match="500 at most"):
         decisions.record(store, _php(store), "approve", "yes", "jch", "t1", leaves="x" * 501)
     assert decisions.history(store) == []
+    longest = decisions.record(store, _php(store), "approve", "", "jch", "t0", leaves="x" * 500)
+    assert len(longest.leaves) == 500  # by the function's rule and the store's
     # a reject needs none, and keeps none
     d = decisions.record(store, _php(store), "reject", "no", "jch", "t1", leaves="a webshell")
     assert d.leaves is None and decisions.history(store)[0].leaves is None
+    assert len(decisions.history(store)) == 2
 
 
 def test_the_store_itself_refuses_an_approve_out_of_scope(store):
@@ -1010,13 +1016,25 @@ def test_the_store_itself_refuses_an_approve_out_of_scope(store):
         (sign, None),
         (sign, ""),
         (sign, "  "),
+        (sign, "\n\t \r"),
         (sign, "x" * 501),
         (None, "a webshell"),
         ("[]", "a webshell"),
+        ("[ ]", "a webshell"),
+        ("null", "a webshell"),
+        ("junk", "a webshell"),
+        ('{"kev:CVE-2026-1": 1}', "a webshell"),
+        ('["kev:CVE-2026-2"]', "a webshell"),  # a sign, of another CVE
     ):
         with pytest.raises(sqlite3.IntegrityError, match="sign of an attack and what it leaves"):
             store.db.execute(insert, ("approve", signs, leaves))
-    store.db.execute(insert, ("approve", sign, "a webshell"))
+    two = insert.replace('["CVE-2026-1"]', '["CVE-2026-1", "CVE-2026-2"]')
+    assert two != insert
+    for cves_insert, signs in ((two, sign), (insert.replace('["CVE-2026-1"]', "[]"), sign)):
+        with pytest.raises(sqlite3.IntegrityError, match="sign of an attack and what it leaves"):
+            store.db.execute(cves_insert, ("approve", signs, "a webshell"))  # one CVE bare; none
+    store.db.execute(two, ("approve", '["kev:CVE-2026-1", "manual:CVE-2026-2"]', "a webshell"))
+    store.db.execute(insert, ("approve", sign, "x" * 500))
     store.db.execute(insert, ("reject", "[]", None))  # a reject is held to neither
 
 
@@ -1067,16 +1085,63 @@ def test_an_approve_covering_a_cve_nobody_attacks_asks_for_a_look_again(page, ca
     _, html = page.request("GET")
     card = _card_html(html, PHP[0])
     assert f'name="cves" value="{",".join(PHP)}"' in card  # the rated CVE isn't listed
-    assert "Look again" in card and f"No sign of an attack on:</strong> {RATED}" in card
+    assert "Look again" in card
+    assert f"Approved with no sign of an attack on:</strong> {RATED}" in card
     assert "1 to decide" in html
     assert cli.main(["--home", str(page.site.home), "candidates", "list", "--days", "60"]) == 0
-    assert f"it covers {RATED}, with no sign of an attack" in capsys.readouterr().out
+    assert f"it covered {RATED}, which had no sign of an attack then" in capsys.readouterr().out
+    # it stays past its window (off the page it could be neither drafted nor settled)
+    page.site.days = 5
+    _, html = page.request("GET")
+    card = _card_html(html, PHP[0])
+    assert "Before the 5 days" in card and "Look again" in card
+    assert "and 1 older still to decide" in html
     # deciding again covers the attacked CVEs alone, and settles it
     assert page.post(page.form())[0].status == 303
     assert _stored(page)[0].cves == PHP
     _, html = page.request("GET")
+    assert f'id="t-{PHP[0].lower()}"' not in html  # settled, and out of the 5 days
+    page.site.days = 30
+    _, html = page.request("GET")
     card = _card_html(html, PHP[0])
     assert "pill-approve" in card and "Look again" not in card
+
+
+def test_an_old_reject_covering_a_cve_nobody_attacks_stays_settled(page):
+    def seed(s):
+        from tests.test_candidates import _rh
+
+        _rh(s, RATED)
+        s.db.execute(
+            "INSERT INTO decision (decided_at, cves, kind, families, verdict, reason,"
+            " decided_by, signs) VALUES ('2026-11-06T00:00:00.000000Z', ?, 'judge',"
+            " '[\"php\"]', 'reject', 'GitLab, not PHP', 'jch', ?)",
+            (json.dumps(sorted([*PHP, RATED])), json.dumps([f"nvd:{cve}" for cve in PHP])),
+        )
+
+    _with(page, seed)
+    _, html = page.request("GET")
+    card = _card_html(html, PHP[0])
+    assert "pill-reject" in card and "Look again" not in card
+
+
+def test_the_cli_refuses_such_an_approve_before_anything_is_fetched_or_sent(
+    page, capsys, monkeypatch
+):
+    from drafter import draft
+
+    _with(page, _approved_with_a_rated_cve)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    monkeypatch.setattr(draft, "sources", lambda *a, **kw: pytest.fail("sources were read"))
+    home = ["--home", str(page.site.home)]
+    for extra in (["--dry-run"], []):
+        assert cli.main([*home, "draft", *PHP, RATED, *extra]) == 1
+        assert f"no sign of an attack on {RATED}" in capsys.readouterr().err
+    s = Store(page.site.store_path, read_only=True)
+    try:
+        assert draft.ledger(s) == []
+    finally:
+        s.close()
 
 
 def test_nothing_is_drafted_from_an_approve_that_covers_a_cve_nobody_attacks(store):
@@ -1105,6 +1170,8 @@ def test_the_form_asks_what_it_would_leave_and_the_page_shows_the_answer(page):
     response, html = page.post(page.form(leaves="  ", reason="looks bad"))
     assert response.status == 400 and "say what the attack would leave on a server" in html
     assert "looks bad</textarea>" in html and _stored(page) == []
+    _, html = page.request("GET")
+    assert "What would it leave on a server? (needed to approve" in _card_html(html, PHP[0])
     answer = 'webshells in the web root; <b>php-fpm</b> spawning "sh"'
     assert page.post(page.form(leaves=answer, reason=""))[0].status == 303
     assert _stored(page)[0].leaves == answer

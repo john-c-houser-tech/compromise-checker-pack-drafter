@@ -93,8 +93,9 @@ def in_scope(decision: decisions.Decision) -> decisions.Decision:
     if bare:
         raise DraftError(
             f"approved {decision.decided_at[:10]} with no sign of an attack on"
-            f" {', '.join(bare)}: a pack is for attacks seen in the wild. If the threat"
-            " is on the page, decide it again there; if it isn't, nothing is attacking it"
+            f" {', '.join(bare)}: a pack is for attacks seen in the wild. Its card on the"
+            " page reads Look again: decide it again there. No card means no sign of an"
+            " attack on any of its CVEs"
         )
     return decision
 

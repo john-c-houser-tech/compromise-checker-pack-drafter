@@ -338,7 +338,7 @@ def test_schema_4_moves_up_with_its_decisions_and_their_ids(tmp_path):
         s.db.execute(insert, ("approve", ""))  # schema 9: an approve is in scope, or refused
     s.db.execute(
         "INSERT INTO decision (decided_at, cves, kind, families, verdict, reason, decided_by,"
-        " signs, leaves) VALUES ('t', '[]', 'judge', '[]', 'approve', '', 'jch',"
+        " signs, leaves) VALUES ('t', '[\"CVE-2026-1\"]', 'judge', '[]', 'approve', '', 'jch',"
         " '[\"kev:CVE-2026-1\"]', 'a webshell')"
     )  # an approve may go without a reason
     with pytest.raises(sqlite3.IntegrityError):

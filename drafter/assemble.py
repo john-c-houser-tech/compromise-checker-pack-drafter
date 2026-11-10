@@ -1029,7 +1029,7 @@ def template(store: Store, draft_path: Path, clone_path: Path) -> str:
         f"window_start = {start}T00:00:00Z",
         f"# CISA listed it on {kev}; a first sighting in the wild needs a source of its own."
         if kev
-        else "# No sign of attacks in the wild in the store.",
+        else "# Not on CISA's list; a first sighting in the wild needs a source of its own.",
         f"# first_seen_in_wild = {start}T00:00:00Z  # replace with the sighting's own time",
         "# How much exposure weighs: more than 1, at most 10 (the checker's cap), for this threat",
         "# on its own merits (another pack's weight is no guide).",

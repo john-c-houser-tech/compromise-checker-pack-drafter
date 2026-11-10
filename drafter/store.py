@@ -280,14 +280,26 @@ BEGIN SELECT RAISE(ABORT, 'an added source is only ever taken back, once'); END;
     9: """
 -- The checker's scope (2026-11-10): a pack is for an attack seen in the wild that
 -- leaves signs on a server. So an approve says what the attack would leave there,
--- in a line, and is made on signs of an attack; the store refuses one without
--- either, whatever wrote it. Approves made before keep NULL, and are not changed.
+-- in a line, and each of its CVEs has a sign of an attack ("kev:CVE-…" in signs);
+-- the store refuses one without either, whatever wrote it. Approves made before
+-- keep NULL, and are not changed. (CASE, so the JSON is only read once it is known
+-- to be JSON: SQLite doesn't promise the order an OR is worked out in.)
 ALTER TABLE decision ADD COLUMN leaves TEXT;
 CREATE TRIGGER decision_approve_in_scope BEFORE INSERT ON decision
-WHEN NEW.verdict = 'approve' AND (
-    NEW.leaves IS NULL OR length(trim(NEW.leaves)) = 0 OR length(NEW.leaves) > 500
-    OR NEW.signs IS NULL OR NEW.signs = '[]'
-)
+WHEN NEW.verdict = 'approve' AND CASE
+    WHEN NEW.leaves IS NULL OR length(NEW.leaves) > 500 THEN 1
+    WHEN length(trim(NEW.leaves, ' ' || char(9, 10, 11, 12, 13))) = 0 THEN 1
+    WHEN NEW.signs IS NULL OR NOT json_valid(NEW.signs) OR NOT json_valid(NEW.cves) THEN 1
+    WHEN json_type(NEW.signs) IS NOT 'array' OR json_type(NEW.cves) IS NOT 'array' THEN 1
+    WHEN json_array_length(NEW.cves) = 0 THEN 1
+    ELSE EXISTS (
+        SELECT 1 FROM json_each(NEW.cves) AS c
+        WHERE NOT EXISTS (
+            SELECT 1 FROM json_each(NEW.signs) AS s
+            WHERE substr(s.value, instr(s.value, ':') + 1) = c.value
+        )
+    )
+END
 BEGIN
     SELECT RAISE(ABORT, 'an approve needs a sign of an attack and what it leaves on a server');
 END;

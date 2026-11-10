@@ -832,7 +832,7 @@ def test_description_words_count_even_when_nvd_names_other_products(store):
     assert only.kind == "thirdparty" and "description mentions PHP" in only.watched_via[0]
 
 
-def test_a_vendor_rating_alone_does_not_make_a_third_party_threat(store):
+def test_a_rating_alone_on_a_watched_product_is_only_counted(store):
     _rh(store, "CVE-2026-5004")
     _nvd(
         store,
@@ -910,7 +910,7 @@ def test_nvd_products_and_description_from_a_page():
     assert row["description"] == "In PHP x"
 
 
-def test_a_vendor_rating_alone_is_not_left_open_either(store):
+def test_a_rating_alone_with_no_package_is_only_counted_not_left_open(store):
     import datetime as dt
 
     _rh(store, "CVE-2026-5008")  # Red Hat's own rating, and no RHEL package
@@ -950,6 +950,32 @@ def test_refresh_reads_no_records_for_a_rating_alone(store, ctx):
     _rh(store, "CVE-2026-6001")
     assert c.refresh(ctx, SINCE).fetched == 0
     assert store.db.execute("SELECT count(*) FROM vendor_cve").fetchone()[0] == 0
+
+
+def test_ubuntus_record_is_read_once_to_date_a_rating_alone(store, ctx, fetcher):
+    # The feed has only when Ubuntu's record last changed: an old critical CVE whose
+    # record changes today would be counted as rated today, for good.
+    old = "CVE-2021-44228"
+    store.upsert(
+        "osv",
+        {
+            "ecosystem": "Ubuntu",
+            "id": "UBUNTU-" + old,
+            "modified": "2026-11-01T00:00:00.000000Z",
+            "cves": "[]",
+            "ubuntu_priority": "critical",
+            "fetch_id": _fid(store),
+        },
+        ("ecosystem", "id"),
+    )
+    assert [x.kind for x in c.classify(store, SINCE, RULES, WATCH)] == ["rated"]
+    record = {"id": "UBUNTU-" + old, "published": "2021-12-10T00:00:00Z", "affected": []}
+    fetcher.add(c.UBUNTU_URL.format(cve=old), ok(record))
+    assert c.refresh(ctx, SINCE).fetched == 1  # Ubuntu's only, never Red Hat's
+    rows = store.db.execute("SELECT vendor FROM vendor_cve").fetchall()
+    assert [r[0] for r in rows] == ["ubuntu"]
+    assert c.classify(store, SINCE, RULES, WATCH) == []  # rated in 2021: not in the window
+    assert c.refresh(ctx, "2021-01-01T00:00:00.000000Z").fetched == 0  # and not read again
 
 
 def test_a_cve_rated_long_ago_and_attacked_now_is_new_now(store):

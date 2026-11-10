@@ -180,6 +180,10 @@ first new threat for real, through review, proof and John's signature.
   "the tool can't judge this yet". Kernel support goes into the tool as its Phase 6,
   after its web interface (Phase 5); design in the tool's DESIGN.md section 10.5.
   Until then kernel threats get a notice and no pack.
+- **D3, changed 2026-11-10 (John, the checker's scope):** a vendor's top severity
+  alone no longer lists a CVE. Only CISA's list, CISA's "exploitation: active" and
+  adding by hand do; the ratings are shown on an attacked CVE and counted
+  (`docs/candidates.md`). The rest of D3 below is as it was decided.
 - **D3. What counts as a sign of exploitation? DECIDED (John, 2026-11-07):** any
   of CISA's exploited list, CISA's SSVC "exploitation: active" in NVD, or Ubuntu's
   or Red Hat's top severity on a network-facing package, plus adding by hand with

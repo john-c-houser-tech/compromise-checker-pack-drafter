@@ -95,7 +95,7 @@
         {{ "Approved" if d.verdict == "approve" else "Rejected" }} {{ d.decided_at[:16]|replace("T", " ") }} UTC by {{ d.decided_by }}{% if d.reason %}:
         <q>{{ d.reason }}</q>{% endif %}
         {% if d.leaves %}<br><strong>Would leave on a server:</strong> {{ d.leaves }}{% endif %}
-        {% if st.unattacked %}<br><strong>No sign of an attack on:</strong> {{ st.unattacked|join(", ") }} (approved before packs were kept to attacks seen in the wild; decide again){% endif %}
+        {% if st.unattacked %}<br><strong>Approved with no sign of an attack on:</strong> {{ st.unattacked|join(", ") }} (before the 2026-11-10 rule that a pack needs a sign of an attack on every CVE; decide again){% endif %}
         {% if st.new %}<br><strong>Came after it:</strong> {{ st.new|join(", ") }}{% endif %}
         {% if st.apart %}<br><strong>Decided apart:</strong> {{ st.apart|join(", ") }}{% endif %}
         {% if st.moved %}<br><strong>Now in another threat:</strong> {{ st.moved|join(", ") }}{% endif %}

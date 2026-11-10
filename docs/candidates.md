@@ -26,8 +26,9 @@ the wild, and a rating says how bad a flaw could be, not that anyone is using it
 Until 2026-11-10 a rating was enough to list a CVE, and .NET, ca-certificates, Java
 and edk2 all came in that way: none was being attacked, and none left anything on a
 server to look for. Now such a CVE is **counted in one line** ("Rated critical by
-a vendor, no sign of an attack"), its vendor records aren't read, and it joins no
-threat, even one for the same package in the same days. If attacks are reported
+a vendor, no sign of an attack"), its vendor records aren't read (but for Ubuntu's,
+once, which dates Ubuntu's rating), and it joins no threat, even one for the same
+package in the same days. If attacks are reported
 later, it comes onto the list then.
 
 ## The vendors' own records
@@ -126,7 +127,7 @@ an attack listing a CVE:
 | Not on a supported release | | 156 |
 | Rated critical by a vendor, no sign of an attack | | 324 |
 
-About one threat a month and a half that the tool could judge, each of them
+About four threats every three months that the tool could judge, each of them
 attacked. The 30 days to 2026-11-10 went from eight threats under "Can judge" to
 four: PHP2Shell, Brotli, Ruby and OpenSSH stayed; .NET, ca-certificates, Java and
 edk2 left.

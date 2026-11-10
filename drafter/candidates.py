@@ -5,7 +5,8 @@ list, rated "exploitation: active" by CISA in NVD, or added by hand with a note 
 where that came from. Ubuntu's critical priority and Red Hat's Critical severity
 are shown on such a CVE, but a rating alone puts nothing on the list (the checker's
 scope, 2026-11-10: packs are for attacks seen in the wild): those CVEs are counted,
-and that is all. For each CVE on the list the drafter fetches Ubuntu's OSV record
+and that is all (Ubuntu's record is read once for one, to date its rating). For
+each CVE on the list the drafter fetches Ubuntu's OSV record
 and Red Hat's record once, and keeps them. A candidate is then sorted:
 
 - judge: a package on a supported release (Ubuntu 22.04 and later, RHEL 9 and 10,
@@ -414,7 +415,18 @@ def refresh(ctx: Context, since: str, *, limit: int = 5000) -> Refresh:
     todo = []
     for cve, sigs in signals(store, since).items():
         if not attacked(sigs):
-            continue  # a rating alone: counted, never listed, so its records aren't read
+            # A rating alone: counted, never listed, so its records aren't read. But
+            # Ubuntu's rating is dated by Ubuntu's own record (the feed has only when
+            # the record last changed), so that one is read, once: without it, every
+            # old critical CVE whose record changes would be counted as rated today.
+            attempted, checked = known.get((cve, "ubuntu"), (None, None))
+            failed = attempted is not None and (checked is None or checked < attempted)
+            if any(s.kind == "ubuntu" for s in sigs) and (
+                attempted is None
+                or (failed and now - timeutil.parse(attempted) >= RETRY_FAILED_AFTER)
+            ):
+                todo.append((attempted is not None, attempted or "", cve, "ubuntu"))
+            continue
         first = timeutil.parse(first_sign(sigs))
         newest = sigs[-1].when
         every = dt.timedelta(days=1) if now - first <= RECENT else dt.timedelta(days=7)

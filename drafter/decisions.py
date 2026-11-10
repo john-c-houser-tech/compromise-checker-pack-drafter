@@ -290,5 +290,5 @@ def describe(st: State) -> str:
     if st.attacked:
         parts.append(f"attacks reported since: {', '.join(st.attacked)}")
     if st.unattacked:
-        parts.append(f"it covers {', '.join(st.unattacked)}, with no sign of an attack")
+        parts.append(f"it covered {', '.join(st.unattacked)}, which had no sign of an attack then")
     return f"look again: {said}, but {'; '.join(parts)}"

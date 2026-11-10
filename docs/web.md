@@ -76,7 +76,7 @@ judge** and **Third-party builds** with a form each; **Kernels** (a notice only,
 plan D2) and **Set aside** (changed in `setaside.toml`, not here) without one.
 Below them, the CVEs that aren't threats here yet, and every decision made.
 
-The window goes by each CVE's first sign, as the list's does. A threat no one has
+The window goes by each CVE's first sign of an attack, as the list's does. A threat no one has
 decided stays on the page after its first sign leaves the window, marked "Before
 the 30 days", until someone decides it. The page reads back 180 days (as far as
 `candidates refresh` keeps vendor records current), and never before 2026-10-08,
@@ -102,11 +102,12 @@ window, 30 days by default).
   500 characters, kept with the decision and shown on the card, in the history
   and by `drafter decisions`. A reject needs none and keeps none. And every CVE
   under an approve has a sign of an attack. The store holds both rules itself (a
-  trigger), so nothing that writes to it can approve without them. Approves made
+  trigger, CVE by CVE), so nothing that writes to it can approve without them. Approves made
   before the rule have no answer and stay as they are.
-- **An approve from before the rule that covers a CVE nobody is attacking** reads
-  **Look again**, naming the CVE (Ruby's, made on 2026-11-08 with a CVE that only
-  Red Hat's rating had listed). Deciding again covers the attacked CVEs alone.
+- **An approve from before the rule that covered a CVE with no sign of an attack**
+  reads **Look again**, naming the CVE (Ruby's, made on 2026-11-08 with a CVE that
+  only Red Hat's rating had listed). It stays on the page, past the 30 days, until
+  it is decided again; deciding again covers the attacked CVEs alone.
   `drafter draft`, `drafter pack template` and `drafter pack write` refuse to work
   from such an approve, so the threats approved on a rating alone (.NET and
   ca-certificates; Java and edk2 were rejected since) get no new draft or pack

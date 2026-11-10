@@ -1019,7 +1019,9 @@ def test_a_clash_fill_already_reported_is_reported_once(store, tmp_path, clone, 
 # the checker's scope (2026-11-10): no pack without something to look for
 
 
-@pytest.mark.parametrize("empty", ["detections: []", "detections:\n- {}"])
+@pytest.mark.parametrize(
+    "empty", ["detections: []", "detections:\n- {}", "detections: none", "detections: {a: 1}"]
+)
 def test_a_draft_with_no_detections_is_never_written(store, tmp_path, clone, ready, empty):
     draft, asked = ready
     start = DRAFT.index("detections:")

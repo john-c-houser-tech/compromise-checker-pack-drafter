@@ -200,7 +200,8 @@ class Osv(Feed):
 
     def keep_body(self, store, row: dict) -> bool:
         """Ubuntu's records run to half a megabyte each (every binary of every release),
-        so their bodies are kept only when they are a sign of exploitation (D3).
+        so their bodies are kept only for the ones Ubuntu rates critical (D3; shown on
+        an attacked CVE and counted, never a reason to list one since 2026-11-10).
         The hash and time are always kept; A.3 fetches fresh copies when it needs them.
         """
         if self.ecosystem != "Ubuntu" or row["ubuntu_priority"] == "critical":

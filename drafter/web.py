@@ -52,7 +52,7 @@ log = logging.getLogger(__name__)
 
 DEFAULT_PORT = 8089
 DEFAULT_ORIGIN = "https://packs.localhost:8443"
-MAX_BODY = 8 * 1024
+MAX_BODY = 16 * 1024  # a reason and an answer at their longest, in any script
 # How far back the page reads, so a threat still to decide stays on it after its
 # last sign is older than --days: as far back as `candidates refresh` keeps vendor
 # records current (its default window).
@@ -199,7 +199,7 @@ def view(site: Site, store: Store) -> dict:
     # CVE ever decided is settled once it leaves the window, so ageing alone never
     # reopens a decision.
     # A reject that has had a sign of attacks since comes back too (A.4b), whatever
-    # its age.
+    # its age; and an approve that covers a CVE approved with no sign of an attack.
     in_window = {c.cve for c in found}
     wide = timeutil.fmt(max(now - max(OPEN_FOR, dt.timedelta(days=site.days)), OPEN_SINCE))
     before = [
@@ -209,6 +209,10 @@ def view(site: Site, store: Store) -> dict:
         and (
             c.cve not in by_cve
             or decisions.attacked_since(by_cve[c.cve], candidates.Threat(c.kind, [], [c]))
+            # An approve from before the scope rule that asks for a look again
+            # stays until it is decided again: off the page it could be neither
+            # drafted from nor settled.
+            or decisions.unattacked_under(by_cve[c.cve])
         )
     ]
     earlier = [g for g in candidates.threats(before) if g.kind in decisions.DECIDABLE]
