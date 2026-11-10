@@ -61,9 +61,16 @@ file), and one that matches no gap any more is refused too. Accepted gaps and th
 reasons are shown under NEEDS A PERSON. A vendor that doesn't track a CVE at all
 ("Ubuntu has no record for …", routine for a RHEL-only CVE) is shown there but
 doesn't stop the write. A `by_hand`
-entry (release, binary names, source, and optionally versions, a fixed build and a
-note) is marked in the pack as written by a person, and held to the same clash rules
-as the vendors' entries.
+entry (release, binary names, source, and optionally versions, a fixed build, a
+note, and `native = true` for a native Ubuntu package such as ca-certificates, whose
+versions have no revision: the checker's format refuses a revision-less fix otherwise)
+is marked in the pack as written by a person, and held to the same clash rules as the
+vendors' entries. When Ubuntu's own data gives such a fix, the fill doesn't guess: it
+names the binaries with a pattern nothing matches (every build reads can't judge) and
+says so under NEEDS A PERSON. Settle it by keeping Ubuntu out of the binary filter
+(`binaries = ["rhel:ca-certificates"]`) and writing Ubuntu's entries by hand, with
+`native = true`. A pack with one is refused by checker 0.1.1 and earlier, on every
+pull, so `pack write` says to publish it only after a checker release that reads it.
 
 `packages_from` is for a threat whose fix is in another package's update: Red Hat
 marks its Java packages "will not fix" for CVE-2026-91403 because RHEL is fixed by the

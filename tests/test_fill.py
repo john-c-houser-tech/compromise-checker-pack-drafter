@@ -918,3 +918,41 @@ def test_with_no_fix_a_binarys_version_is_only_its_current_build():
     draft = fill.Draft(cves=[CVE], binary_filter=[])
     entries = fill.ubuntu_entries(record, CVE, [], draft)
     assert entries and all(e.fixed is None for e in entries) and not draft.conflicts
+
+
+CERTS_FIX = "20260816ubuntu0.24.04.1"
+
+
+def test_a_native_package_from_ubuntu_is_left_to_a_person():
+    # ca-certificates: no revision, and its builds lack the "ubuntu" mark the
+    # shapes are cut on (20260601~24.04.1), so fill names it, can't judge it, and
+    # says to write it by hand with native = true.
+    record = {"id": "UBUNTU-" + CVE, "related": [], "affected": [{
+        "package": {"ecosystem": "Ubuntu:24.04:LTS", "name": "ca-certificates"},
+        "versions": ["20240203", "20260601~24.04.1"],
+        "ranges": [{"type": "ECOSYSTEM", "events": [{"introduced": "0"}, {"fixed": CERTS_FIX}]}],
+        "ecosystem_specific": {"binaries": _bins("ca-certificates")},
+    }]}  # fmt: skip
+    draft = fill.Draft(cves=[CVE], binary_filter=[])
+    (entry,) = fill.ubuntu_entries(record, CVE, [], draft)
+    assert (entry.versions, entry.fixed, entry.native) == (fill.UNMAPPED, None, False)
+    (gap,) = draft.conflicts
+    assert "native package" in gap and "native = true" in gap and CERTS_FIX in gap
+    assert "native" not in fill.render_yaml(draft).replace("a native package", "")
+
+
+def test_native_keeps_two_entries_apart():
+    vendor = fill.Entry(
+        "ubuntu:24.04", ["ca-certificates"], None, CERTS_FIX, "https://x/", "ubuntu"
+    )
+    mine = fill.Entry(**{**vendor.__dict__, "origin": "byhand", "native": True})
+    draft = fill.Draft(cves=[CVE], binary_filter=[], entries=[vendor, mine])
+    fill._merge(draft)
+    assert sorted(e.native for e in draft.entries) == [False, True]  # not folded into one
+    signed = {"id": "x", "version": 1, "exposure": {"packages": [
+        {"release": "ubuntu:24.04", "binary_names": ["ca-certificates"], "fixed": CERTS_FIX,
+         "source": "https://x/", "native": True}]}}  # fmt: skip
+    plain = fill.Draft(cves=[CVE], binary_filter=[], entries=[vendor])
+    assert "1 entries the same" not in fill.compare(plain, yaml.safe_dump(signed))
+    native = fill.Draft(cves=[CVE], binary_filter=[], entries=[mine])
+    assert "1 entries the same" in fill.compare(native, yaml.safe_dump(signed))
